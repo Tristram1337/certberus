@@ -391,19 +391,20 @@ EOF
 # LE calls to the HARICA endpoint and certbot failed with "requires EAB".
 # Uses a guard to prevent duplicate warnings across parent/child loading.
 cb_sanitize_acme_url() {
-    [[ -n "${_CB_ACME_URL_SANITIZED:-}" ]] && return 0
     local url="${CB_ACME_URL:-}"
     if [[ -z "$url" ]]; then
-        _CB_ACME_URL_SANITIZED=1
-        export _CB_ACME_URL_SANITIZED
         return 0
     fi
-    # Placeholder (napr. '.../acme/..../directory') → zahodit.
+    # Placeholder (e.g. '.../acme/..../directory') -> discard.
+    # Deduplicate warning for same value across parent/child processes (export).
     if [[ "$url" == *".../"* || "$url" == *"VAS_UUID"* || "$url" == *"YOUR_UUID"* ]]; then
-        cb_warn "CB_ACME_URL contains a placeholder ($url), discarding."
+        if [[ "${_CB_ACME_URL_WARNED:-}" != "$url" ]]; then
+            cb_warn "CB_ACME_URL contains a placeholder ($url), discarding."
+            _CB_ACME_URL_WARNED="$url"
+            export _CB_ACME_URL_WARNED
+        fi
         CB_ACME_URL=""
-        _CB_ACME_URL_SANITIZED=1
-        export _CB_ACME_URL_SANITIZED CB_ACME_URL
+        export CB_ACME_URL
         return 0
     fi
     # CA / URL mismatch: if LE but URL points elsewhere, discard and use default.
@@ -427,8 +428,7 @@ cb_sanitize_acme_url() {
             fi
             ;;
     esac
-    _CB_ACME_URL_SANITIZED=1
-    export _CB_ACME_URL_SANITIZED CB_ACME_URL
+    export CB_ACME_URL
 }
 
 # -------- Retry wrapper --------
