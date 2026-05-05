@@ -50,47 +50,53 @@ certberus v$CB_VERSION - unified cert deployment
 
 Usage: certberus [GLOBAL] COMMAND [ARGS]
 
-Commands:
-  install       Interaktivni pruvodce (auto-detect webserver, zepta se na CA)
-  issue         Vydat/obnovit cert (non-interactive, respektuje config.env)
-  renew         Vynutit obnovu (idempotentni)
-  discover      Zobraz domeny, ktere miri na tento server (z certbot+cfg+HTTPS)
-  test-domain D Preflight: DNS+CAA+port 80+existujici cert pro domenu
-  expiry        Expirace vsech certifikatu (certbot + mod_md)
-  revoke D      Revokovat cert pro domenu (certbot) / odstranit z mod_md
-  status        Vypsat stav vsech spravovanych certifikatu
-  doctor        Diagnostika (DNS, firewall, port, moduly, verze)
-  rollback      Rollback z posledniho snapshotu
+  ╭───────────────────────────────────────────────────────────────╮
+  │  MAIN COMMANDS                                                 │
+  ╰───────────────────────────────────────────────────────────────╯
+
+  certberus interactive    Interactive wizard (asks about everything).
+                           Recommended for first-time setup.
+                           Alias: install
+
+  certberus auto           Plne automaticky podle /etc/certberus/config.env.
+                           Bez otazek, autodetekce domen, vhodne pro cron/CI.
+                           Alias: run
+
+  ╭───────────────────────────────────────────────────────────────╮
+  │  PROVOZNI PRIKAZY                                             │
+  ╰───────────────────────────────────────────────────────────────╯
+
+  status        Stav spravovanych certifikatu
+  expiry        Expirace certifikatu (certbot + mod_md)
+  doctor        Diagnostika (DNS, firewall, porty, moduly, verze)
+  discover      Zobraz domeny ktere miri na tento server
+  test-domain D Preflight (DNS+CAA+port 80+cert) pro jednu domenu
+  renew         Vynutit obnovu (synonym pro auto/issue, idempotentni)
+  revoke D      Revokovat cert pro domenu
+  rollback      Vratit posledni snapshot
   hooks         Sprava hook skriptu (list / show / run)
   version       Verze
   help          Tato napoveda
 
-Global options:
+  ╭───────────────────────────────────────────────────────────────╮
+  │  GLOBAL OPTIONS (usually not needed - use config.env)         │
+  ╰───────────────────────────────────────────────────────────────╯
+
   --webserver apache|nginx|tomcat|auto     (default: auto)
   --ca letsencrypt|harica|zerossl          (default: letsencrypt)
-  --domain D (opakovatelne)
-  --email E
-  --eab-kid KID    --eab-hmac HMAC
-  --acme-url URL  Vlastni ACME directory URL (vyzadovano pro HARICA/ZeroSSL per-account)
-  --webroot DIR   ACME webroot (nginx/tomcat)
-  --port80 STRAT  Tomcat port-80 strategie: iptables|webroot|proxy
-  --no-firewall   Nikdy automaticky nemenit firewall
-  --open-firewall Explicitne povolit firewall mutace (vcetne HARICA)
-  --skip-dns-check Preskocit kontrolu DNS A/AAAA -> server (NAT/LB scenare)
-  --set CB_X=Y    Pokrocily override libovolne CB_* volby (opakovatelne)
-  --auto          Auto-objev domen z certbot+webserver+HTTPS, filtr jen ty co miri sem
-  --auto --force  Non-interactive, selze pokud chybi email/domeny
-  -t, --staging   -y, --yes   -n, --dry-run   -v, --verbose
+  --domain D (repeatable)      --email E
+  --eab-kid KID    --eab-hmac HMAC    --acme-url URL
+  --webroot DIR    --port80 STRAT (tomcat: iptables|webroot|proxy)
+  --no-firewall    --open-firewall    --skip-dns-check
+  --set CB_X=Y     (repeatable, advanced override)
+  -t/--staging   -y/--yes   -n/--dry-run   -v/--verbose
 
-Priklady:
-  certberus install                        # interaktivni
-  certberus issue --webserver apache --ca harica \\
-           --eab-kid ABC --eab-hmac XYZ \\
-           --acme-url https://acme.harica.gr/ALIAS/directory \\
-           --email admin@example.com --domain www.example.com
-  certberus status
-  certberus doctor
-  certberus rollback                        # poslednu snapshot
+Examples:
+  certberus interactive                   # first setup - wizard
+  certberus auto                          # production per config.env
+  certberus auto --staging                # test without rate limits
+  certberus auto --dry-run -v             # show what it would do, no changes
+  certberus doctor                        # verify environment
 
 Configuration in /etc/certberus/config.env (reads: $CB_CONFIG_FILE)
 EOF
@@ -492,6 +498,9 @@ cmd_issue() {
     [[ -z "$ws" || "$ws" == "auto" ]] && ws="${CB_WEBSERVER:-auto}"
     if [[ "$ws" == "auto" ]]; then
         local d; d=$(cb_detect_webserver)
+        if [[ "$d" == *+* ]]; then
+            cb_die "Detekovano vice webserveru ($d). Vyber jeden: --webserver apache|nginx|tomcat (nebo CB_WEBSERVER v config.env)."
+        fi
         case "$d" in
             *apache*) ws="apache" ;;
             *nginx*)  ws="nginx" ;;
@@ -502,6 +511,60 @@ cmd_issue() {
     fi
     auto_discover_or_die
     cmd_issue_webserver "$ws"
+}
+
+# -------- Command: auto --------
+# Fully non-interactive mode. Takes everything from /etc/certberus/config.env,
+# supplements with CLI flags and auto-detection. Fails fast on missing required fields.
+#
+# Idempotent:
+#   - existing cert with >30 days until expiry -> just reload
+#   - otherwise ACME issue/renew
+#
+# Suitable for cron, systemd timer, CI:
+#   0 3 * * *  /usr/local/sbin/certberus auto >>/var/log/certberus/cron.log 2>&1
+cmd_auto() {
+    # Auto = vse non-interactive
+    CB_ASSUME_YES=1
+    CLI_FORCE=1
+    # Pokud admin nezadal --domain ani CB_DOMAINS, autodetekuj
+    if [[ -z "$CLI_DOMAINS" && -z "${CB_DOMAINS:-}" ]]; then
+        CLI_AUTO=1
+    fi
+
+    # Email is required — from CLI or config (placeholder admin@example.com is a fail)
+    local email="${CLI_EMAIL:-${CB_EMAIL:-}}"
+    if [[ -z "$email" || "$email" == "admin@example.com" ]]; then
+        cb_error "Missing valid email for CA."
+        cb_log "  Vypln CB_EMAIL v $CB_CONFIG_FILE nebo pouzij --email."
+        exit 2
+    fi
+
+    # CA-specific checks
+    local ca="${CB_CA_CLI:-${CB_CA:-letsencrypt}}"
+    case "$ca" in
+        harica)
+            local kid="${CLI_EAB_KID:-${CB_EAB_KID:-}}"
+            local hmac="${CLI_EAB_HMAC:-${CB_EAB_HMAC:-}}"
+            local url="${CLI_ACME_URL:-${CB_ACME_URL:-${CB_ACME_URL_HARICA:-}}}"
+            [[ -n "$kid" && -n "$hmac" ]] || {
+                cb_error "CA harica requires CB_EAB_KID and CB_EAB_HMAC in config.env (or --eab-kid/--eab-hmac).";
+                exit 2; }
+            [[ -n "$url" ]] || {
+                cb_error "CA harica requires CB_ACME_URL (per-account/alias directory URL).";
+                cb_log "  Example: https://acme.harica.gr/<ALIAS>/directory"
+                exit 2; }
+            ;;
+        zerossl)
+            local kid="${CLI_EAB_KID:-${CB_EAB_KID:-}}"
+            local hmac="${CLI_EAB_HMAC:-${CB_EAB_HMAC:-}}"
+            [[ -n "$kid" && -n "$hmac" ]] || {
+                cb_error "CA zerossl requires CB_EAB_KID and CB_EAB_HMAC in config.env.";
+                exit 2; }
+            ;;
+    esac
+
+    cmd_issue "$@"
 }
 
 cmd_issue_webserver() {
@@ -525,7 +588,11 @@ cmd_issue_webserver() {
     cb_log "Using: $script"
     local -a fwd=()
     mapfile -t fwd < <(build_forward_args "$ws")
-    exec "$script" "${fwd[@]}"
+    # Don't use `exec` — we want parent EXIT traps (e.g. bundle wrapper
+    # cleaning up tmpdir with extracted libraries) to run.
+    # Propagate webserver script exit code.
+    "$script" "${fwd[@]}"
+    exit $?
 }
 
 cmd_status() {
@@ -701,9 +768,10 @@ case "$CMD" in
 esac
 
 case "$CMD" in
-    install)     cmd_install "$@" ;;
+    interactive|install) cmd_install "$@" ;;
+    auto|run)     cmd_auto "$@" ;;
     issue)       cmd_issue "$@" ;;
-    renew)       cmd_issue "$@" ;;  # renew = issue (certbot idempotentni, mod_md taky)
+    renew)       cmd_auto "$@" ;;  # renew = auto (certbot/mod_md idempotentni)
     status)      cmd_status "$@" ;;
     doctor)      cmd_doctor "$@" ;;
     discover)    cmd_discover "$@" ;;
