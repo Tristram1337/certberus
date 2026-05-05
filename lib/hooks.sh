@@ -132,6 +132,25 @@ cb_mod_md_adapter_body() {
 set -u
 EVENT="${1:-unknown}"
 DOMAIN="${2:-}"
+
+# Sanitization: EVENT must be only [a-z0-9-], DOMAIN must be only FQDN chars.
+# Apache mod_md events are a known list, but defense is defense - we do not want
+# a future (or modified) version of mod_md to send "../foo" as an event.
+case "$EVENT" in
+    pre-issue|post-issue|post-reload|renewing|renewed|installed|errored|\
+    expiring|ocsp-renewed|ocsp-errored|challenge-setup|challenge-cleanup|\
+    on-failure|deploy|unknown) ;;
+    *)
+        logger -t certberus-md -p daemon.warn -- "rejected unknown event=$EVENT" 2>/dev/null || true
+        exit 0
+        ;;
+esac
+# DOMAIN: allow fqdn / wildcard / empty
+if [[ -n "$DOMAIN" ]] && ! [[ "$DOMAIN" =~ ^(\*\.)?[A-Za-z0-9._-]+$ ]]; then
+    logger -t certberus-md -p daemon.warn -- "rejected unsafe domain=$DOMAIN" 2>/dev/null || true
+    exit 0
+fi
+
 export CA_EVENT="$EVENT"
 export CA_WEBSERVER="apache"
 export CA_PRIMARY_DOMAIN="$DOMAIN"
