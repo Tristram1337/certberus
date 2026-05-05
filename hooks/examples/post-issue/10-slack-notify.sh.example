@@ -1,0 +1,35 @@
+#!/bin/bash
+# 10-slack-notify.sh.example
+# Sends notification to Slack (Discord/Teams use the same webhook format).
+# Usage: copy to /etc/certberus/hooks/post-issue.d/ (or on-failure.d/)
+# and uncomment/fill in WEBHOOK.
+
+WEBHOOK="${CB_NOTIFY_WEBHOOK:-}"
+[[ -z "$WEBHOOK" ]] && exit 0   # silent if not configured
+
+case "$CA_EVENT" in
+    post-issue|post-deploy|renewed|installed)
+        EMOJI=":white_check_mark:"
+        MSG="Certberus: cert *issued/renewed* for ${CA_PRIMARY_DOMAIN}"
+        ;;
+    on-failure|errored)
+        EMOJI=":x:"
+        MSG="Certberus: *FAILURE* during event ${CA_PREV_STAGE:-?} for ${CA_PRIMARY_DOMAIN:-?}"
+        ;;
+    expiring)
+        EMOJI=":warning:"
+        MSG="Certberus: cert ${CA_PRIMARY_DOMAIN} expiring soon"
+        ;;
+    *)
+        exit 0  # don't notify for other events
+        ;;
+esac
+
+PAYLOAD=$(printf '{"text":"%s %s (webserver=%s, CA=%s, host=%s)"}' \
+    "$EMOJI" "$MSG" "${CA_WEBSERVER:-?}" "${CA_CERT_ISSUER:-?}" "$(hostname -f 2>/dev/null)")
+
+curl -m 10 -sS -X POST -H 'Content-type: application/json' \
+    --data "$PAYLOAD" "$WEBHOOK" >/dev/null 2>&1 || \
+    logger -t certberus-hook "slack-notify failed"
+
+exit 0

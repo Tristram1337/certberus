@@ -1,0 +1,30 @@
+#!/bin/bash
+# 10-verify-https.sh.example
+# After deploy+reload, verify that HTTPS is actually running and serving the correct cert.
+# Usage: /etc/certberus/hooks/post-reload.d/10-verify-https.sh
+
+set -u
+PRIMARY="${CA_PRIMARY_DOMAIN:-}"
+[[ -z "$PRIMARY" ]] && { logger -t certberus-hook "verify-https: missing CA_PRIMARY_DOMAIN"; exit 1; }
+
+# Wait briefly for the webserver to load the new config
+sleep 3
+
+# 1. TCP connection
+if ! timeout 5 bash -c "echo > /dev/tcp/$PRIMARY/443" 2>/dev/null; then
+    logger -t certberus-hook "verify-https: port 443 on $PRIMARY not responding"
+    exit 1
+fi
+
+# 2. TLS handshake + cert subject
+SUBJ=$(echo | timeout 10 openssl s_client -connect "$PRIMARY:443" -servername "$PRIMARY" 2>/dev/null \
+    | openssl x509 -noout -subject 2>/dev/null)
+
+if [[ -z "$SUBJ" ]]; then
+    logger -t certberus-hook "verify-https: TLS handshake with $PRIMARY failed"
+    exit 1
+fi
+
+# 3. Log result
+logger -t certberus-hook "verify-https OK: $PRIMARY -> $SUBJ"
+exit 0

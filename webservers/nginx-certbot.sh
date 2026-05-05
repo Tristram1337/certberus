@@ -1,0 +1,683 @@
+#!/bin/bash
+# certberus/webservers/nginx-certbot.sh
+# nginx + certbot (webroot) - Let's Encrypt or CESNET/HARICA via EAB.
+#
+# Strategy: certbot issues the cert, nginx reloads. Cert resides
+# in /etc/letsencrypt/live/DOMAIN/ and is used directly (symlinks).
+set -uo pipefail
+
+_SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+_LIB_DIR="${CB_LIB_DIR:-$(dirname "$_SCRIPT_DIR")/lib}"
+if [[ ! -f "$_LIB_DIR/common.sh" ]]; then
+    for d in /usr/local/lib/certberus /usr/lib/certberus /opt/certberus/lib; do
+        [[ -f "$d/common.sh" ]] && { _LIB_DIR="$d"; break; }
+    done
+fi
+# shellcheck disable=SC1091
+source "$_LIB_DIR/common.sh"
+# shellcheck disable=SC1091
+source "$_LIB_DIR/os.sh"
+# shellcheck disable=SC1091
+source "$_LIB_DIR/dns.sh"
+# shellcheck disable=SC1091
+source "$_LIB_DIR/firewall.sh"
+# shellcheck disable=SC1091
+source "$_LIB_DIR/hooks.sh"
+# shellcheck disable=SC1091
+source "$_LIB_DIR/preflight.sh"
+cb_load_config
+
+: "${CB_NGINX_CONF_DIR:=/etc/nginx}"
+: "${CB_NGINX_WEBROOT:=/var/www/acme}"
+: "${CB_NGINX_SITES_AVAILABLE:=$CB_NGINX_CONF_DIR/sites-available}"
+: "${CB_NGINX_SITES_ENABLED:=$CB_NGINX_CONF_DIR/sites-enabled}"
+: "${CB_CERTBOT_HOOK_DIR:=/etc/letsencrypt/renewal-hooks/deploy}"
+
+CB_CA="${CB_CA:-letsencrypt}"
+CB_DOMAINS="${CB_DOMAINS:-}"
+CB_EMAIL="${CB_EMAIL:-}"
+CB_EAB_KID="${CB_EAB_KID:-}"
+CB_EAB_HMAC="${CB_EAB_HMAC:-}"
+CB_ACME_URL="${CB_ACME_URL:-}"
+CB_EAB_REQUIRED="${CB_EAB_REQUIRED:-0}"
+VALID_DOMAINS=()
+
+usage() {
+    cat <<USAGE
+nginx-certbot.sh - nginx + certbot webroot + Let's Encrypt / HARICA
+
+Usage: $0 [OPTIONS]
+
+  -t, --staging        Staging CA
+  -y, --yes            Non-interactive
+  -n, --dry-run        Simulation
+  -v, --verbose        Debug
+      --domain D       Domain (repeatable)
+      --email E        Contact email
+      --ca NAME        letsencrypt | harica | zerossl
+      --acme-url URL   Vlastni ACME URL
+      --webroot DIR    ACME webroot (default: /var/www/acme)
+      --eab-kid KID
+      --eab-hmac HMAC
+      --no-firewall    Never automatically modify firewall
+      --open-firewall  Explicitly allow firewall mutations (including HARICA)
+      --set CB_X=Y     Advanced override of any CB_* option
+  -h, --help
+USAGE
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) usage; exit 0 ;;
+            -t|--staging) CB_STAGING=1 ;;
+            -y|--yes) CB_ASSUME_YES=1 ;;
+            -n|--dry-run) CB_DRY_RUN=1 ;;
+            -v|--verbose) CB_VERBOSE=1 ;;
+            --domain) shift; CB_DOMAINS="$CB_DOMAINS $1" ;;
+            --email) shift; CB_EMAIL="$1" ;;
+            --ca) shift; CB_CA="$1" ;;
+            --acme-url) shift; CB_ACME_URL="$1" ;;
+            --webroot) [[ $# -ge 2 ]] || cb_die "--webroot requires a value"; shift; CB_NGINX_WEBROOT="$1" ;;
+            --eab-kid) shift; CB_EAB_KID="$1" ;;
+            --eab-hmac) shift; CB_EAB_HMAC="$1" ;;
+            --no-firewall) cb_apply_cli_set "CB_FIREWALL_AUTO_OPEN=0" ;;
+            --open-firewall)
+                cb_apply_cli_set "CB_FIREWALL_AUTO_OPEN=1"
+                cb_apply_cli_set "CB_HARICA_FIREWALL_AUTO_OPEN=1"
+                ;;
+            --set) [[ $# -ge 2 ]] || cb_die "--set requires a value CB_NAME=value"; shift; cb_apply_cli_set "$1" ;;
+            *) cb_warn "Unknown argument: $1" ;;
+        esac
+        shift
+    done
+}
+
+# ============================================================================
+stage_prepare() {
+    cb_banner "Certberus / nginx / certbot"
+    cb_require_root
+    cb_require_os debian ubuntu
+    cb_hook_context nginx ""
+    mkdir -p "$CB_LOG_DIR" "$CB_NGINX_WEBROOT" "$CB_CERTBOT_HOOK_DIR" "$CB_STATE_DIR" 2>/dev/null
+    cb_run_hooks pre-install
+}
+
+stage_install_packages() {
+    cb_sep
+    local need=()
+    cb_pkg_installed nginx || need+=(nginx)
+    cb_pkg_installed certbot || need+=(certbot)
+    # dnsutils (dig) is not strictly needed - getent handles A/AAAA; CAA is just a warning
+    if (( ${#need[@]} > 0 )); then
+        cb_log "Missing: ${need[*]}"
+        cb_ask_yn "Install?" "Y/n" || cb_die "Aborting"
+        cb_pkg_install "${need[@]}" || cb_die "Installation failed"
+    else
+        cb_ok "All packages are present"
+    fi
+    cb_run_hooks post-install
+}
+
+stage_snapshot() {
+    cb_sep
+    cb_run_hooks pre-snapshot
+    # The snapshot also includes certbot state (/etc/letsencrypt) so rollback restores the original cert.
+    # Non-existent paths are automatically skipped by cb_snapshot.
+    cb_snapshot "$CB_NGINX_CONF_DIR" "nginx-pre-cert" \
+        /etc/letsencrypt/live \
+        /etc/letsencrypt/archive \
+        /etc/letsencrypt/renewal \
+        /etc/letsencrypt/accounts \
+        >/dev/null
+    # Firewall snapshot for rollback
+    cb_firewall_snapshot >/dev/null
+    cb_run_hooks post-snapshot
+}
+
+stage_detect_existing() {
+    cb_sep
+    # Detect other ACME clients
+    for c in acme.sh dehydrated lego; do
+        command -v "$c" >/dev/null 2>&1 && cb_warn "Found another ACME client: $c - possible conflict"
+    done
+    # Detect staging data
+    if [[ -d /etc/letsencrypt/renewal ]] && [[ "$CB_STAGING" == "0" ]]; then
+        if grep -rq 'acme-staging' /etc/letsencrypt/renewal/ 2>/dev/null; then
+            cb_warn "Found staging certbot certificate in /etc/letsencrypt/"
+            cb_warn "Will be overwritten during production renewal"
+        fi
+    fi
+    # Detect other ssl_certificate paths
+    if command -v nginx >/dev/null; then
+        local current_certs
+        current_certs=$(nginx -T 2>/dev/null | grep -E '^\s*ssl_certificate\s' | awk '{print $2}' | sort -u)
+        [[ -n "$current_certs" ]] && cb_log "Current nginx ssl_certificate paths: $current_certs"
+    fi
+}
+
+stage_find_domains() {
+    cb_sep
+    if [[ -n "$CB_DOMAINS" ]]; then
+        for d in $CB_DOMAINS; do
+            cb_validate_domain "$d" || { cb_warn "Ignoring: $d"; continue; }
+            VALID_DOMAINS+=("$d")
+        done
+    else
+        # Detect from nginx server_name directives
+        cb_log "Searching for domains in nginx configuration"
+        local domains
+        domains=$(nginx -T 2>/dev/null | \
+            grep -E '^\s*server_name\s' | \
+            sed -e 's/^\s*server_name//' -e 's/;//' | \
+            tr ' ' '\n' | \
+            grep -v '^_$' | grep -v '^$' | sort -u)
+        if [[ -z "$domains" ]]; then
+            cb_warn "nginx -T did not provide config, trying fallback grep over $CB_NGINX_CONF_DIR"
+            domains=$(grep -RhsE '^\s*server_name\s' "$CB_NGINX_CONF_DIR" 2>/dev/null | \
+                sed -e 's/^\s*server_name//' -e 's/;//' | \
+                tr ' ' '\n' | grep -v '^_$' | grep -v '^$' | sort -u)
+        fi
+        for d in $domains; do
+            [[ "$d" == \** ]] && continue
+            cb_validate_domain "$d" || continue
+            if cb_domain_points_here "$d"; then
+                VALID_DOMAINS+=("$d")
+                cb_ok "Domain OK: $d"
+            else
+                cb_warn "Domain does not point here: $d"
+            fi
+        done
+    fi
+
+    (( ${#VALID_DOMAINS[@]} > 0 )) || cb_die "No valid domain"
+    cb_hook_context nginx "${VALID_DOMAINS[@]}"
+}
+
+stage_email() {
+    if [[ -z "$CB_EMAIL" ]]; then
+        CB_EMAIL=$(cb_ask_in "Contact email" "admin@$(hostname -d 2>/dev/null || echo example.com)")
+    fi
+    cb_validate_email "$CB_EMAIL" || cb_die "Invalid email: $CB_EMAIL"
+}
+
+# Detects orphaned /etc/letsencrypt/{live,archive}/DOMAIN/ and empty renewal confs
+# that certbot would reject with "live/archive directory exists for ...".
+# Returns 0 if state is valid (keep), 1 if cleaned up (or did not exist).
+cb_cleanup_orphan_certbot_state() {
+    local d="$1"
+    local live="/etc/letsencrypt/live/$d"
+    local arch="/etc/letsencrypt/archive/$d"
+    local conf="/etc/letsencrypt/renewal/$d.conf"
+
+    # Valid certbot state: all three exist, renewal conf is not empty,
+    # archive has cert1.pem and symlinks in live point to archive.
+    if [[ -f "$conf" && -s "$conf" && -d "$arch" && -e "$live/fullchain.pem" && ! -e "$live/.certberus-placeholder" ]]; then
+        local target
+        target=$(readlink -f "$live/fullchain.pem" 2>/dev/null)
+        if [[ "$target" == "$arch/"* ]]; then
+            return 0
+        fi
+        cb_warn "Cert for $d has unexpected symlinks (not pointing to archive/). Cleaning up."
+    fi
+
+    local cleaned=0
+    if [[ -d "$live" ]]; then
+        cb_warn "Orphaned /etc/letsencrypt/live/$d (missing renewal conf or archive, or is placeholder). Removing."
+        rm -rf "$live"
+        cleaned=1
+    fi
+    if [[ -d "$arch" ]]; then
+        cb_warn "Orphaned /etc/letsencrypt/archive/$d. Removing."
+        rm -rf "$arch"
+        cleaned=1
+    fi
+    if [[ -f "$conf" ]] && ! [[ -s "$conf" ]]; then
+        cb_warn "Empty /etc/letsencrypt/renewal/$d.conf. Removing."
+        rm -f "$conf"
+        cleaned=1
+    fi
+    return 0
+}
+
+# If an nginx vhost references a cert file that does not exist (broken state),
+# generate a temporary self-signed placeholder. This allows nginx -t to pass and
+# certbot to run. The placeholder is marked with .certberus-placeholder and is
+# removed before the actual certbot request.
+cb_ensure_cert_placeholder() {
+    local d="$1"
+    local live="/etc/letsencrypt/live/$d"
+    local fc="$live/fullchain.pem"
+    local pk="$live/privkey.pem"
+
+    # Check whether nginx references this path at all.
+    # `nginx -T` does not output config when syntax test fails (e.g. due to missing cert),
+    # so we fall back to a direct grep of the config directory.
+    local referenced=0
+    if command -v nginx >/dev/null 2>&1 && nginx -T 2>/dev/null | grep -qF "$fc"; then
+        referenced=1
+    elif grep -rqF "$fc" "$CB_NGINX_CONF_DIR" 2>/dev/null; then
+        referenced=1
+    fi
+    [[ $referenced -eq 1 ]] || return 0
+
+    # If the cert exists and is readable - do nothing
+    if [[ -e "$fc" && -e "$pk" ]] && openssl x509 -in "$fc" -noout 2>/dev/null; then
+        return 0
+    fi
+
+    # If there is broken state from previous attempts, clean it up
+    cb_cleanup_orphan_certbot_state "$d"
+
+    cb_warn "Nginx vhost references missing $fc - generating temporary self-signed placeholder."
+    [[ "$CB_DRY_RUN" == "1" ]] && { cb_log "[dry-run] skipping placeholder generation"; return 0; }
+
+    mkdir -p "$live"
+    # EC P-256 self-signed, 7 dni, s SAN
+    if ! openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+            -days 7 -keyout "$pk" -out "$fc" \
+            -subj "/CN=$d" -addext "subjectAltName=DNS:$d" 2>/dev/null; then
+        # Fallback for older openssl: RSA 2048
+        openssl req -x509 -nodes -newkey rsa:2048 -days 7 \
+            -keyout "$pk" -out "$fc" \
+            -subj "/CN=$d" -addext "subjectAltName=DNS:$d" 2>/dev/null \
+            || cb_die "Failed to generate self-signed placeholder for $d"
+    fi
+    chmod 600 "$pk"
+    touch "$live/.certberus-placeholder"
+    cb_ok "Placeholder installed: $fc (self-signed, 7 days)"
+}
+
+# Stage: for each VALID_DOMAIN - clean orphaned certbot state and deploy
+# a placeholder if an nginx vhost references a missing cert.
+stage_ensure_cert_placeholders() {
+    cb_sep
+    local d
+    for d in "${VALID_DOMAINS[@]}"; do
+        cb_ensure_cert_placeholder "$d"
+    done
+}
+
+stage_firewall() {
+    cb_firewall_ensure_http_https_for_acme
+}
+
+stage_nginx_acme_location() {
+    cb_sep
+    # Zajistime, ze nginx ma /.well-known/acme-challenge location ukazujici na WEBROOT
+    # Strategie: pridame snippet ktery se include-uje do vsech :80 server bloku.
+    local snippet="$CB_NGINX_CONF_DIR/snippets/certberus-acme.conf"
+    mkdir -p "$(dirname "$snippet")"
+    if [[ "$CB_DRY_RUN" == "0" ]]; then
+        cat > "$snippet" <<EOF
+# Certberus ACME HTTP-01 challenge location (generovano, neupravovat).
+location /.well-known/acme-challenge/ {
+    root $CB_NGINX_WEBROOT;
+    default_type "text/plain";
+    try_files \$uri =404;
+}
+EOF
+    fi
+    cb_ok "ACME challenge snippet: $snippet"
+    cb_log "Pridejte include $snippet; do server { listen 80; ... } bloku."
+    # Auto-inject: if default site exists, add include
+    local default_site="$CB_NGINX_SITES_ENABLED/default"
+    if [[ -f "$default_site" ]] && ! grep -q "certberus-acme.conf" "$default_site"; then
+        if cb_ask_yn "Pridat include snippetu do $default_site?" "Y/n"; then
+            if [[ "$CB_DRY_RUN" == "0" ]]; then
+                # NOTE: backup must NOT end up in /etc/nginx/sites-enabled/ -
+                # nginx tam ma `include sites-enabled/*;` a duplicitni server{}
+                # blok by zpusobil "duplicate default server" chybu (BUG #19).
+                local backup_dir="${CB_BACKUP_DIR:-/var/backups/certberus}/nginx-vhost-backups"
+                mkdir -p "$backup_dir"
+                cp "$default_site" "$backup_dir/$(basename "$default_site").bak_$(date +%s)"
+                # NOTE: plain `sed /listen 80/a` also matches comments
+                # `#\tlisten 80;` v priklade na konci Debian default souboru,
+                # cimz include skonci MIMO jakykoliv server{} blok a nginx -t
+                # selze s "location directive is not allowed here".
+                # Proto: match jen NON-comment radek s `listen 80` uvnitr server{}.
+                # Pouzijeme awk se state-machine pro spolehlive vlozeni pred
+                # uzaviraci } prvniho server bloku, ktery obsahuje listen 80.
+                awk -v snip="$snippet" '
+                    BEGIN { inserted=0; depth=0; in_server=0; has_listen=0; buf="" }
+                    {
+                        if (inserted) { print; next }
+                        line=$0
+                        # Track server { start
+                        if (line ~ /^[[:space:]]*server[[:space:]]*\{/ && depth==0) {
+                            in_server=1; has_listen=0; buf=""
+                        }
+                        # Count braces to detect server block end
+                        n=gsub(/\{/, "{", line); depth += n
+                        n=gsub(/\}/, "}", line); depth -= n
+                        # Real (non-comment) listen 80 line?
+                        if (in_server && line ~ /^[[:space:]]*listen[[:space:]]+(80|\[::\]:80)([[:space:]]|;)/) {
+                            has_listen=1
+                        }
+                        # If we are about to close server block that has listen 80, insert snippet
+                        if (in_server && depth==0 && has_listen && !inserted) {
+                            # The closing } is in this line - insert before it
+                            print "    include " snip ";"
+                            inserted=1
+                        }
+                        print $0
+                        if (depth==0) in_server=0
+                    }
+                ' "$default_site" > "$default_site.new" && mv "$default_site.new" "$default_site"
+                if grep -q "certberus-acme.conf" "$default_site"; then
+                    cb_ok "Include pridan do $default_site"
+                else
+                    cb_warn "Include se nepodarilo vlozit (neznama struktura $default_site)"
+                fi
+            fi
+        fi
+    fi
+}
+
+stage_install_deploy_hook() {
+    cb_sep
+    local hook="$CB_CERTBOT_HOOK_DIR/certberus-nginx-reload.sh"
+    cb_log "Installing deploy hook: $hook"
+    if [[ "$CB_DRY_RUN" == "0" ]]; then
+        cat > "$hook" <<'HOOK_EOF'
+#!/bin/bash
+# Certberus certbot deploy hook for nginx - generated, do not edit.
+# Invoked by certbot after successful cert renewal.
+LOG="/var/log/certberus/certbot-renewal.log"
+mkdir -p "$(dirname "$LOG")" 2>/dev/null
+TS="[$(date '+%F %T')]"
+echo "$TS Renewed: $RENEWED_DOMAINS ($RENEWED_LINEAGE)" >> "$LOG" 2>/dev/null
+command -v logger >/dev/null && logger -t certberus-nginx "renewal: $RENEWED_DOMAINS"
+
+# Export to hook env
+export CA_EVENT="renewed"
+export CA_WEBSERVER="nginx"
+export CA_PRIMARY_DOMAIN=$(echo "$RENEWED_DOMAINS" | awk '{print $1}')
+export CA_DOMAIN_LIST="$RENEWED_DOMAINS"
+export CA_CERT_PATH="$RENEWED_LINEAGE/fullchain.pem"
+export CA_KEY_PATH="$RENEWED_LINEAGE/privkey.pem"
+export CA_SOURCE="certbot"
+
+# Run certberus hooks renewed.d and post-deploy.d
+for ev in renewed post-deploy; do
+    D="/etc/certberus/hooks/${ev}.d"
+    [[ -d "$D" ]] || continue
+    if command -v run-parts >/dev/null; then
+        run-parts --regex '^[0-9a-zA-Z][0-9a-zA-Z._-]*[0-9a-zA-Z]$' "$D" >> "$LOG" 2>&1 || true
+    fi
+done
+
+reload_nginx() {
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl reload nginx
+    elif command -v service >/dev/null 2>&1; then
+        service nginx reload
+    elif command -v nginx >/dev/null 2>&1; then
+        nginx -s reload
+    else
+        return 1
+    fi
+}
+
+if nginx -t >/dev/null 2>&1; then
+    if reload_nginx >/dev/null 2>&1; then
+        echo "$TS nginx reload OK" >> "$LOG"
+    else
+        echo "$TS ERROR: nginx reload failed" >> "$LOG"
+        exit 1
+    fi
+else
+    echo "$TS ERROR: nginx -t failed, reload skipped" >> "$LOG"
+    exit 1
+fi
+HOOK_EOF
+        chmod +x "$hook"
+    fi
+    cb_ok "Deploy hook: $hook"
+}
+
+stage_issue_cert() {
+    cb_sep
+    cb_run_hooks pre-issue
+
+    # Make sure nginx is running and listening on 80
+    cb_svc_is_active nginx || {
+        cb_log "Starting nginx"
+        [[ "$CB_DRY_RUN" == "0" ]] && cb_svc_start nginx
+    }
+    [[ "$CB_DRY_RUN" == "0" ]] && nginx -s reload 2>/dev/null || true
+
+    # URL
+    local acme_url="$CB_ACME_URL"
+    case "$CB_CA" in
+        letsencrypt)
+            [[ -z "$acme_url" && "$CB_STAGING" == "1" ]] && acme_url="https://acme-staging-v02.api.letsencrypt.org/directory"
+            ;;
+        harica)
+            # HARICA/CESNET TCS provides a per-account ACME directory URL;
+            # there is no universal fallback. We require explicit --acme-url or CB_ACME_URL_HARICA.
+            [[ -z "$acme_url" ]] && acme_url="${CB_ACME_URL_HARICA:-}"
+            CB_EAB_REQUIRED=1
+            [[ -n "$acme_url" ]] || cb_die "CA harica requires --acme-url (per-account HARICA ACME directory URL), e.g. https://acme.harica.gr/<alias>/directory. Alternatively set CB_ACME_URL_HARICA in /etc/certberus/advanced.env."
+            [[ "$acme_url" != *".../"* && "$acme_url" != *"VAS_"* && "$acme_url" != *"<"* ]] || cb_die "HARICA ACME URL looks like a placeholder: $acme_url"
+            ;;
+        zerossl)
+            [[ -z "$acme_url" ]] && acme_url="${CB_ACME_URL_ZEROSSL:-https://acme.zerossl.com/v2/DV90}"
+            CB_EAB_REQUIRED=1
+            ;;
+    esac
+
+    # EAB validation
+    if [[ "$CB_EAB_REQUIRED" == "1" ]]; then
+        [[ -n "$CB_EAB_KID" ]] || CB_EAB_KID=$(cb_ask_in "EAB KID" "")
+        [[ -n "$CB_EAB_HMAC" ]] || CB_EAB_HMAC=$(cb_ask_secret "EAB HMAC")
+        [[ -n "$CB_EAB_KID" && -n "$CB_EAB_HMAC" ]] || cb_die "CA $CB_CA requires EAB"
+    fi
+
+    local args=(certonly --webroot -w "$CB_NGINX_WEBROOT" \
+                --email "$CB_EMAIL" --agree-tos --no-eff-email \
+                --non-interactive --keep-until-expiring)
+    [[ -n "$acme_url" ]] && args+=(--server "$acme_url")
+    [[ "$CB_EAB_REQUIRED" == "1" ]] && args+=(--eab-kid "$CB_EAB_KID" --eab-hmac-key "$CB_EAB_HMAC")
+    [[ "$CB_DRY_RUN" == "1" ]] && args+=(--dry-run)
+
+    # --cert-name zafixuje nazev certifikatu na primarni domenu → certbot nebude
+    # hadat podle existujicich renewal.conf a nezmatene pri multi-SAN vystaveni.
+    local primary_d="${VALID_DOMAINS[0]}"
+    args+=(--cert-name "$primary_d")
+    # --expand resi pripad, ze nektera z VALID_DOMAINS uz ma samostatny cert a
+    # my ji chceme zahrnout jako SAN do primarniho certu. Bez nej certbot selze
+    # na interaktivni dotaz "Do you want to expand and replace this existing certificate?".
+    if (( ${#VALID_DOMAINS[@]} > 1 )); then
+        args+=(--expand)
+    fi
+
+    local d
+    for d in "${VALID_DOMAINS[@]}"; do
+        args+=(-d "$d")
+    done
+
+    # Detekce zmeny CA: pokud existuje validni cert pro primarni domenu od jineho issuera,
+    # certbot s --keep-until-expiring by nikdy nezmenil issuera (CA-swap selze tichym no-op).
+    # V takovem pripade pridame --force-renewal, abychom cert vystavili u nove CA.
+    local live_cert="/etc/letsencrypt/live/$primary_d/fullchain.pem"
+    if [[ -f "$live_cert" ]]; then
+        local cur_issuer wanted_issuer_re=""
+        cur_issuer=$(openssl x509 -in "$live_cert" -noout -issuer 2>/dev/null || true)
+        case "$CB_CA" in
+            letsencrypt) wanted_issuer_re='Let.?s Encrypt' ;;
+            harica)      wanted_issuer_re='HARICA|Hellenic|GEANT|CESNET' ;;
+            zerossl)     wanted_issuer_re='ZeroSSL' ;;
+        esac
+        if [[ -n "$wanted_issuer_re" && -n "$cur_issuer" ]] && ! echo "$cur_issuer" | grep -qiE "$wanted_issuer_re"; then
+            cb_warn "Existujici cert pro $primary_d je od jine CA (issuer: $cur_issuer). Vynucuji --force-renewal pro prechod na $CB_CA."
+            args+=(--force-renewal)
+        fi
+    fi
+
+    # Before the actual certbot request:
+    #  - remove our self-signed placeholders (certbot would reject with "live directory exists")
+    #  - clean orphaned certbot state from previous failures (empty renewal confs etc.)
+    local dd
+    for dd in "${VALID_DOMAINS[@]}"; do
+        if [[ -e "/etc/letsencrypt/live/$dd/.certberus-placeholder" ]]; then
+            cb_log "Removing placeholder /etc/letsencrypt/live/$dd/ before certbot request"
+            rm -rf "/etc/letsencrypt/live/$dd" "/etc/letsencrypt/archive/$dd"
+            rm -f  "/etc/letsencrypt/renewal/$dd.conf"
+        else
+            cb_cleanup_orphan_certbot_state "$dd" || true
+        fi
+    done
+
+    cb_log "certbot ${args[*]}"
+    # NOTE: certbot 4.x returns exit 0 even when authorization failed.
+    # cb_certbot_issue overi fyzicky vystup (existence cert file + mtime).
+    local primary="${VALID_DOMAINS[0]}"
+    if ! cb_retry "${CB_RETRY_COUNT:-3}" "${CB_RETRY_DELAY:-10}" cb_certbot_issue "$primary" "${args[@]}"; then
+        cb_die "certbot selhal"
+    fi
+    cb_ok "Certifikat vydan"
+    cb_hook_set_cert "/etc/letsencrypt/live/$primary/fullchain.pem" \
+                    "/etc/letsencrypt/live/$primary/privkey.pem" \
+                    "$CB_CA"
+    cb_run_hooks post-issue
+}
+
+stage_inject_nginx_ssl() {
+    cb_sep
+    # This is optional - the script can just issue the cert and leave nginx config to the admin.
+    # Below is a minimal addition of ssl_certificate directives if missing.
+    local primary="${VALID_DOMAINS[0]}"
+    local live_dir="/etc/letsencrypt/live/$primary"
+    if [[ ! -d "$live_dir" && "$CB_DRY_RUN" == "0" ]]; then
+        cb_warn "Not certain $live_dir exists - skipping injection"
+        return 0
+    fi
+    cb_log "HTTPS configuration for nginx (paths: $live_dir)"
+    cb_log "Tip: for full configuration, edit sites-available/ manually - this script only issues the cert."
+    cb_log "Cert will be automatically reloaded on renewal via deploy hook."
+}
+
+stage_enable_timer() {
+    # certbot.timer (systemd)
+    if systemctl list-unit-files 2>/dev/null | grep -q '^certbot\.timer'; then
+        systemctl enable --now certbot.timer >/dev/null 2>&1 && cb_ok "certbot.timer enabled"
+    elif systemctl list-unit-files 2>/dev/null | grep -q '^snap.certbot.renew.timer'; then
+        systemctl enable --now snap.certbot.renew.timer >/dev/null 2>&1 && cb_ok "snap certbot.renew.timer enabled"
+    fi
+}
+
+stage_preflight() {
+    local synerr
+    synerr=$(nginx -t 2>&1)
+    if [[ $? -eq 0 ]]; then
+        _CB_NGINX_BASELINE_OK=1
+    else
+        _CB_NGINX_BASELINE_OK=0
+    fi
+    _CB_NGINX_BASELINE_CERT_ONLY=0
+    cb_preflight_nginx || true
+    # If nginx -t is already failing NOW (before any of our actions),
+    # we refuse to continue. Otherwise subsequent stages would create a snippet,
+    # deploy hook, modified vhost etc. and only test_reload would catch it later
+    # - which means unnecessary system modifications (BUG #18b).
+    if [[ "${_CB_NGINX_BASELINE_OK:-1}" == "0" ]]; then
+        if cb_nginx_error_is_missing_cert "$synerr"; then
+            _CB_NGINX_BASELINE_CERT_ONLY=1
+            cb_warn "nginx -t fails due to missing cert/key file; proceeding to placeholder self-signed cert."
+            return 0
+        fi
+        cb_die "nginx -t fails at baseline check. Fix the broken vhost (see preflight warnings) and run again. No changes were made."
+    fi
+}
+
+cb_nginx_error_is_missing_cert() {
+    local text="$1"
+    printf '%s\n' "$text" | grep -qiE 'cannot load certificate|BIO_new_file\(\) failed|SSL_CTX_use_PrivateKey_file|No such file or directory.*(ssl_certificate|/etc/letsencrypt|fullchain|privkey|\.pem)'
+}
+
+stage_test_reload() {
+    cb_sep
+    cb_run_hooks pre-reload
+    local test_out test_rc
+    test_out=$(nginx -t 2>&1); test_rc=$?
+    printf '%s\n' "$test_out" | tee -a "$CB_LOG_FILE"
+    if (( test_rc != 0 )); then
+        if [[ "$CB_DRY_RUN" == "1" && "${_CB_NGINX_BASELINE_CERT_ONLY:-0}" == "1" ]] && cb_nginx_error_is_missing_cert "$test_out"; then
+            cb_warn "[dry-run] nginx -t still fails due to missing cert; in a real run Certberus would generate a placeholder before reload."
+            return 0
+        fi
+        # Baseline was already failing at preflight - the error is not ours.
+        if [[ "${_CB_NGINX_BASELINE_OK:-1}" == "0" && "${_CB_NGINX_BASELINE_CERT_ONLY:-0}" != "1" ]]; then
+            cb_error "nginx -t has been failing from the start (broken vhost outside certberus). Fix and retry."
+            cb_die "No changes were made."
+        fi
+        # If we have not changed anything relevant yet, the problem is not in the cert subsystem.
+        if [[ "${_CB_MODIFIED_CONFIG:-0}" == "0" ]]; then
+            cb_error "nginx -t started failing outside our changes (see preflight warnings)."
+            cb_die "Certberus will not continue. No critical changes were made."
+        fi
+        cb_error "nginx -t failed after our changes"
+        if [[ "${CB_AUTO_ROLLBACK:-0}" == "1" ]]; then
+            cb_snapshot_restore "$CB_LAST_SNAPSHOT"
+            nginx -t 2>&1 | tee -a "$CB_LOG_FILE" || cb_die "nginx -t still fails after rollback"
+            cb_die "Rollback done. Original state preserved, cert is not deployed."
+        else
+            cb_rollback_hint
+            cb_die "nginx -t failed - ROLLBACK"
+        fi
+    fi
+    cb_ok "nginx -t OK"
+    if [[ "$CB_DRY_RUN" == "0" ]]; then
+        if ! cb_svc_reload nginx; then
+            cb_error "nginx reload failed"
+            if [[ "${CB_AUTO_ROLLBACK:-0}" == "1" ]]; then
+                cb_snapshot_restore "$CB_LAST_SNAPSHOT"
+                cb_svc_reload nginx || cb_die "nginx is broken even after rollback"
+                cb_die "Rollback done."
+            fi
+            cb_die "nginx reload failed"
+        fi
+    fi
+    cb_ok "nginx reload OK"
+    cb_mark_installed "nginx-certbot"
+    cb_run_hooks post-reload
+}
+
+# ============================================================================
+on_failure() {
+    local rc=$1
+    [[ $rc -eq 0 ]] && return 0
+    cb_error "Script failed (rc=$rc)"
+    cb_rollback_hint
+    export CA_PREV_EXIT="$rc" CA_PREV_STAGE="${CURRENT_STAGE:-?}"
+    cb_run_hooks on-failure 2>/dev/null || true
+}
+cb_on_exit_register on_failure
+cb_setup_traps
+
+run_stage() { CURRENT_STAGE="$1"; cb_debug "== stage: $1 =="; "stage_$1"; }
+
+main() {
+    parse_args "$@"
+    run_stage prepare
+    run_stage install_packages
+    run_stage preflight
+    run_stage snapshot
+    run_stage detect_existing
+    run_stage find_domains
+    run_stage email
+    run_stage firewall
+    run_stage nginx_acme_location
+    _CB_MODIFIED_CONFIG=1   # od teto chvile uz jsme modifikovali /etc/nginx
+    run_stage install_deploy_hook
+    run_stage ensure_cert_placeholders
+    run_stage test_reload   # first nginx config test (before issue)
+    run_stage issue_cert
+    run_stage inject_nginx_ssl
+    run_stage enable_timer
+    run_stage test_reload
+    cb_sep
+    cb_ok "Done. Domains: ${VALID_DOMAINS[*]}"
+}
+main "$@"

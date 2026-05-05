@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v1.0.1)'
+        required: true
+        default: 'v1.0.0-test'
+
+permissions:
+  contents: write  # for creating GitHub Releases
+
+jobs:
+  # Goal: 4 parallel builds. Each produces its own artifact.
+  build:
+    name: Build ${{ matrix.format }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        format: [tarball, deb, rpm, apk]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        id: ver
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="${{ github.event.inputs.version }}"
+            V="${V#v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "$V" > build/VERSION
+          echo "Building version: $V"
+
+      - name: Build ${{ matrix.format }}
+        run: bash build/build.sh ${{ matrix.format }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: certberus-${{ matrix.format }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke-test:
+    name: Smoke test packages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "${GITHUB_REF_NAME#v}" > build/VERSION
+          else
+            V="${{ github.event.inputs.version }}"
+            echo "${V#v}" > build/VERSION
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-raw
+
+      - name: Consolidate into dist/
+        run: |
+          mkdir -p dist
+          find dist-raw -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) \
+            -exec cp {} dist/ \;
+          ls -lh dist/
+
+      - name: Run smoke test
+        run: bash build/smoke-test.sh
+
+  release:
+    name: Create GitHub Release
+    needs: smoke-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-raw
+
+      - name: Consolidate
+        run: |
+          mkdir -p dist
+          find dist-raw -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) \
+            -exec cp {} dist/ \;
+          # Generate checksums
+          cd dist && sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.apk
+            dist/SHA256SUMS
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

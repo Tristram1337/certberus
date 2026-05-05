@@ -1,0 +1,12 @@
+#!/bin/bash
+# 10-iptables-acme-revoke.sh.example
+# Counterpart to renewing/10-iptables-acme-allow.sh. Removes the temporary rule.
+# Usage: /etc/certberus/hooks/installed.d/10-iptables-acme-revoke.sh
+
+COMMENT="certberus-acme-challenge"
+
+if iptables -C INPUT -p tcp --dport 80 -j ACCEPT -m comment --comment "$COMMENT" 2>/dev/null; then
+    iptables -D INPUT -p tcp --dport 80 -j ACCEPT -m comment --comment "$COMMENT" 2>/dev/null || true
+    logger -t certberus-hook "ACME: port 80 closed after cert installation (${CA_PRIMARY_DOMAIN:-?})"
+fi
+exit 0

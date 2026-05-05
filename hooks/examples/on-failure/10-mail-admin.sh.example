@@ -1,0 +1,39 @@
+#!/bin/bash
+# 10-mail-admin.sh.example
+# Sends email notification to admin on failure.
+# Usage: /etc/certberus/hooks/on-failure.d/10-mail-admin.sh
+# Requires mailx or sendmail.
+
+ADMIN="${CB_NOTIFY_EMAIL:-${CB_EMAIL:-root}}"
+command -v mail >/dev/null 2>&1 || { logger -t certberus-hook "mail is not installed"; exit 0; }
+
+HOST=$(hostname -f 2>/dev/null || hostname)
+SUBJECT="[certberus] FAILURE on $HOST: ${CA_PREV_STAGE:-unknown} / ${CA_PRIMARY_DOMAIN:-?}"
+
+BODY=$(cat <<EOF
+Certberus failed during certificate deployment.
+
+Host:          $HOST
+Webserver:     ${CA_WEBSERVER:-?}
+Domain:        ${CA_PRIMARY_DOMAIN:-?}
+All domains:   ${CA_DOMAIN_LIST:-?}
+CA:            ${CA_CERT_ISSUER:-?}
+Event:         ${CA_EVENT:-?}
+Failed stage:  ${CA_PREV_STAGE:-?}
+Exit code:     ${CA_PREV_EXIT:-?}
+Log:           ${CA_LOG_FILE:-?}
+Snapshot:      ${CA_SNAPSHOT_PATH:-?}
+
+Rollback:
+  tar -xzf ${CA_SNAPSHOT_PATH:-?} -C /
+  systemctl restart ${CA_WEBSERVER:-?}
+
+-- Last log lines --
+$(tail -50 "${CA_LOG_FILE:-/dev/null}" 2>/dev/null || echo "(log not available)")
+EOF
+)
+
+echo "$BODY" | mail -s "$SUBJECT" "$ADMIN" 2>/dev/null || \
+    logger -t certberus-hook "email to $ADMIN failed"
+
+exit 0
