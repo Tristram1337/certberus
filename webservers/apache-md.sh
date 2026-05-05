@@ -689,6 +689,21 @@ main() {
     cb_ok "Hotovo. Domeny: ${VALID_DOMAINS[*]}"
     cb_log "Log: $CB_LOG_FILE"
     [[ "$CB_STAGING" == "1" ]] && cb_warn "STAGING rezim - cert neni duveryhodny v prohlizeci"
+
+    # Co dal: mod_md ziskava certifikat ASYNCHRONNE az PO reloadu Apache.
+    # Prvni ziskani trva typicky 10-60s, nekdy i nekolik minut.
+    cb_sep
+    local _first="${VALID_DOMAINS[0]}"
+    cb_log "Dalsi kroky (mod_md zadava cert ASYNCHRONNE - typicky 10-60s):"
+    cb_log ""
+    cb_log "  Pockej par sekund a pak:"
+    cb_log "    certberus cert-info ${_first}"
+    cb_log ""
+    cb_log "  Sledovat prubeh:"
+    cb_log "    tail -f /var/log/apache2/error.log | grep -i 'md\\['"
+    cb_log ""
+    cb_log "  Pokud cert do 5 minut nedorazi:"
+    cb_log "    certberus test-domain ${_first}     # zkontroluje DNS, CAA, port 80"
 }
 
 main "$@"
