@@ -54,8 +54,9 @@ _cb_init_colors
 # -------- Logging --------
 _cb_ensure_log_dir() {
     [[ -d "$CB_LOG_DIR" ]] && return 0
-    mkdir -p "$CB_LOG_DIR" 2>/dev/null || return 1
-    chmod 755 "$CB_LOG_DIR" 2>/dev/null || true
+    # Logs contain domains + IPs - not world-readable.
+    (umask 027; mkdir -p "$CB_LOG_DIR" 2>/dev/null) || return 1
+    chmod 0750 "$CB_LOG_DIR" 2>/dev/null || true
 }
 
 _cb_write_log() {
@@ -148,22 +149,30 @@ cb_validate_email() {
     [[ "$e" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
 }
 
-# CLI override bez explozivniho mnozstvi flagu.
-# Prijima pouze CB_* promenne, aby neslo prepsat PATH/BASH_ENV apod.
+# CLI override without an explosive number of flags.
+# Accepts only CB_* variables to prevent overwriting PATH/BASH_ENV etc.
+# Value is validated against whitelisted characters - an accidental $(rm -rf /)
+# won't expand (printf -v is safe), but when sourcing CB_X in child scripts
+# (apache-md.sh) it could end up in some eval/cmdline.
 cb_apply_cli_set() {
     local assignment="$1"
-    [[ "$assignment" == *=* ]] || cb_die "--set vyzaduje tvar CB_NAME=hodnota"
+    [[ "$assignment" == *=* ]] || cb_die "--set requires format CB_NAME=value"
     local key="${assignment%%=*}"
     local value="${assignment#*=}"
-    [[ "$key" =~ ^CB_[A-Z0-9_]+$ ]] || cb_die "--set smi nastavovat jen CB_* promenne (zadano: $key)"
+    [[ "$key" =~ ^CB_[A-Z0-9_]+$ ]] || cb_die "--set can only set CB_* variables (given: $key)"
+    # Value whitelist: alphanumeric + safe punctuation. No spaces, no $`'"\;|&<>(){}[]
+    # For complex values use /etc/certberus/config.env (sourced in root-only context).
+    if [[ ! "$value" =~ ^[A-Za-z0-9_./:@+,=-]*$ ]]; then
+        cb_die "--set value contains disallowed characters (allowed: alnum _./:@+,=-): $value"
+    fi
     printf -v "$key" '%s' "$value"
     export "$key"
 }
 
-# -------- Pozadavky --------
+# -------- Requirements --------
 cb_require_root() {
     if [[ "$(id -u)" -ne 0 ]]; then
-        cb_die "Skript musi byt spusten jako root (sudo)."
+        cb_die "Script must be run as root (sudo)."
     fi
 }
 

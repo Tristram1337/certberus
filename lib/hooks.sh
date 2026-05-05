@@ -119,19 +119,38 @@ cb_hook_set_cert() {
 }
 
 # -------- mod_md adapter --------
-# Toto je skript, ktery se instaluje jako MDMessageCMD.
-# Prijde mu: <event> <domain>
-# My ho jen preposleme do cb_run_hooks se spravnymi CA_* promennymi.
+# This is the script installed as MDMessageCMD.
+# It receives: <event> <domain>
+# We just forward it to cb_run_hooks with the correct CA_* variables.
 #
-# Pouziva se z webservers/apache-md*.sh pri generovani hook skriptu.
+# Used from webservers/apache-md*.sh when generating hook scripts.
 cb_mod_md_adapter_body() {
     cat <<'EOF'
 #!/bin/bash
-# Certberus mod_md MDMessageCMD adapter - generovano, neupravovat.
-# Preposila eventy z Apache mod_md do /etc/certberus/hooks/<event>.d/
+# Certberus mod_md MDMessageCMD adapter - generated, do not edit.
+# Forwards events from Apache mod_md to /etc/certberus/hooks/<event>.d/
 set -u
 EVENT="${1:-unknown}"
 DOMAIN="${2:-}"
+
+# Sanitization: EVENT must be only [a-z0-9-], DOMAIN must be only FQDN chars.
+# Apache mod_md events are a known list, but defense is defense - we do not want
+# a future (or modified) version of mod_md to send "../foo" as an event.
+case "$EVENT" in
+    pre-issue|post-issue|post-reload|renewing|renewed|installed|errored|\
+    expiring|ocsp-renewed|ocsp-errored|challenge-setup|challenge-cleanup|\
+    on-failure|deploy|unknown) ;;
+    *)
+        logger -t certberus-md -p daemon.warn -- "rejected unknown event=$EVENT" 2>/dev/null || true
+        exit 0
+        ;;
+esac
+# DOMAIN: allow fqdn / wildcard / empty
+if [[ -n "$DOMAIN" ]] && ! [[ "$DOMAIN" =~ ^(\*\.)?[A-Za-z0-9._-]+$ ]]; then
+    logger -t certberus-md -p daemon.warn -- "rejected unsafe domain=$DOMAIN" 2>/dev/null || true
+    exit 0
+fi
+
 export CA_EVENT="$EVENT"
 export CA_WEBSERVER="apache"
 export CA_PRIMARY_DOMAIN="$DOMAIN"

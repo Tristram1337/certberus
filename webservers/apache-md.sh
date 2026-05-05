@@ -398,6 +398,26 @@ stage_enable_modules() {
             [[ "$CB_DRY_RUN" == "0" ]] && a2enmod "$m" >/dev/null 2>&1
         fi
     done
+    # Po a2enmod overit ze modul je doopravdy nactitelny (apache2ctl -M
+    # nacita celou config, takze pokud chybi knihovny / jine konflikty,
+    # uvidime tady; lepsi nez chyba pri reloadu po nakonfigurovani MDomain).
+    if [[ "$CB_DRY_RUN" == "0" ]]; then
+        local check; check=$("$APACHECTL" -M 2>&1)
+        if ! echo "$check" | grep -q 'md_module'; then
+            cb_error "mod_md neni nactitelny po a2enmod md."
+            cb_log "  Mozne priciny:"
+            cb_log "    - balicek libapache2-mod-md neni instalovan (apt install libapache2-mod-md)"
+            cb_log "    - Apache <2.4.34 (Ubuntu 18.04: upgrade na bionic-backports)"
+            cb_log "    - jiny modul drzi konflikt s mod_md (apache2ctl -M | grep md)"
+            cb_log "  Restart bez mod_md:  a2dismod md && systemctl reload apache2"
+            cb_die "mod_md nedostupny"
+        fi
+        if ! echo "$check" | grep -q 'ssl_module'; then
+            cb_error "mod_ssl neni nactitelny po a2enmod ssl."
+            cb_log "  Resime:  apt install --reinstall apache2-bin"
+            cb_die "mod_ssl nedostupny"
+        fi
+    fi
 }
 
 stage_generate_config() {

@@ -345,7 +345,12 @@ cmd_test_domain() {
     # Port 80 reachability test
     if [[ "$match" == "1" && -n "$myip" ]]; then
         cb_log "Testing reachability of http://$d/ (port 80)..."
-        if timeout 5 bash -c "exec 3<>/dev/tcp/$d/80; echo -e 'HEAD / HTTP/1.0\r\nHost: $d\r\n\r\n' >&3; head -1 <&3" 2>/dev/null | grep -q 'HTTP'; then
+        if timeout 5 bash -c '
+            exec 3<>/dev/tcp/'"$d"'/80 || exit 1
+            printf "HEAD / HTTP/1.0\r\nHost: %s\r\n\r\n" "'"$d"'" >&3
+            head -1 <&3
+            exec 3>&-
+        ' 2>/dev/null | grep -q 'HTTP'; then
             cb_ok "Port 80: reachable (ACME HTTP-01 should work)"
         else
             cb_warn "Port 80: unreachable from outside — ACME HTTP-01 will fail"
@@ -804,9 +809,25 @@ cmd_rollback() {
     if [[ -n "${REMAINING[1]:-}" && -f "${REMAINING[1]}" ]]; then
         last="${REMAINING[1]}"
     else
-        last=$(ls -1t "$CB_BACKUP_DIR"/nginx-pre-*.tar.gz "$CB_BACKUP_DIR"/apache2-pre-*.tar.gz "$CB_BACKUP_DIR"/tomcat-pre-*.tar.gz 2>/dev/null | head -1)
+        # Najdi nejnovejsi snapshot bez ohledu na nazev se znaky.
+        last=$(find "$CB_BACKUP_DIR" -maxdepth 1 -type f \( -name 'nginx-pre-*.tar.gz' -o -name 'apache2-pre-*.tar.gz' -o -name 'tomcat-pre-*.tar.gz' -o -name 'apache-md-pre-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
     fi
     [[ -z "$last" ]] && cb_die "No snapshots (.tar.gz)"
+
+    # Security verification of snapshot file before extraction.
+    [[ -f "$last" && -r "$last" ]] || cb_die "Snapshot not readable: $last"
+    # Realpath must stay in $CB_BACKUP_DIR (unless explicit absolute path given).
+    if [[ -z "${REMAINING[1]:-}" ]]; then
+        local _real; _real=$(readlink -f "$last" 2>/dev/null || echo "$last")
+        case "$_real" in
+            "$CB_BACKUP_DIR"/*) ;;
+            *) cb_die "Snapshot outside $CB_BACKUP_DIR: $_real" ;;
+        esac
+    fi
+    # Test integrity (tar -tzf fail-fast: corrupted archive won't be extracted).
+    if ! tar -tzf "$last" >/dev/null 2>&1; then
+        cb_die "Snapshot is corrupted or not a gzip-tar: $last"
+    fi
     cb_log "Latest snapshot: $last"
     # With -y / CB_ASSUME_YES we proceed, otherwise default N (safe).
     if [[ "$CB_ASSUME_YES" != "1" ]]; then
@@ -868,20 +889,18 @@ case "$CMD" in
         if [[ "${CB_DRY_RUN:-0}" != "1" && "${CB_NO_LOCK:-0}" != "1" ]]; then
             CB_LOCK_FILE="${CB_LOCK_FILE:-/var/lock/certberus.lock}"
             if command -v flock >/dev/null 2>&1; then
-                # Pred `exec 200>` overime, ze umime do souboru zapisovat -
-                # `exec` s neuspesnym redirektem v non-interactive shellu
-                # script bez varovani ukonci. Pokud zapis neni mozny (napr.
-                # nerootovsky test bezici proti /var/lock), padneme na
-                # uzivatelsky fallback v /tmp, jinak pokracujeme bez locku.
-                if ! ( : 2>/dev/null >> "$CB_LOCK_FILE" ); then
+                # Pred `exec 200>` overime, ze umime do souboru zapisovat.
+                if ! ( umask 077; : 2>/dev/null >> "$CB_LOCK_FILE" ); then
                     _alt="/tmp/certberus-${UID:-0}.lock"
-                    if ( : 2>/dev/null >> "$_alt" ); then
+                    if ( umask 077; : 2>/dev/null >> "$_alt" ); then
                         CB_LOCK_FILE="$_alt"
                     else
                         CB_LOCK_FILE=""
                     fi
                 fi
                 if [[ -n "$CB_LOCK_FILE" ]]; then
+                    # Preserve 0600 even on append (umask inside subshell doesn't propagate).
+                    [[ -f "$CB_LOCK_FILE" ]] && chmod 0600 "$CB_LOCK_FILE" 2>/dev/null || true
                     exec 200>>"$CB_LOCK_FILE"
                     if ! flock -n 200; then
                         cb_die "Another certberus process is running (lock $CB_LOCK_FILE). Use CB_NO_LOCK=1 to override."
