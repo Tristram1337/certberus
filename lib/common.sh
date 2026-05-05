@@ -282,6 +282,93 @@ cb_load_config() {
     cb_sanitize_acme_url
 }
 
+# -------- Self-bootstrap of /etc/certberus/ + hooks layout --------
+# Vola se z bin/certberus po cb_load_config, idempotentni.
+# Klicove pro bundle - bez install.sh by /etc/certberus neexistovalo a
+# mod_md adapter (/opt/certberus/mod_md-adapter.sh) by hooky neumel najit.
+# Preskakuje pri non-root (read-only smoke test, --help, version).
+# Vytvori kostru i kdyz uz existuje cast - prida jen chybejici adresare.
+cb_ensure_runtime_dirs() {
+    [[ "$(id -u 2>/dev/null)" == "0" ]] || return 0
+    local d
+    # Hlavni adresare (logy/state/backups - common.sh stejne sam vytvari pri prvnim logu, ale at jsou pri ruce)
+    for d in "$CB_PREFIX" "$CB_HOOKS_DIR" "$CB_LOG_DIR" "$CB_STATE_DIR" "$CB_BACKUP_DIR"; do
+        [[ -d "$d" ]] || mkdir -p "$d" 2>/dev/null || cb_debug "Nelze vytvorit $d"
+    done
+    # Hook event adresare. mod_md emituje: renewing, renewed, installed, errored,
+    # ocsp-errored, ocsp-renewed. Certberus volby: pre-issue, post-issue, post-reload,
+    # on-failure (cb_run_hooks). Vytvarime obe sady, at je to hned pripravene.
+    local ev
+    for ev in pre-issue post-issue post-reload renewing renewed installed errored \
+              ocsp-renewed ocsp-errored on-failure deploy; do
+        d="$CB_HOOKS_DIR/${ev}.d"
+        [[ -d "$d" ]] || mkdir -p "$d" 2>/dev/null
+    done
+    # README v hooks adresari (pri prvni instalaci)
+    if [[ ! -f "$CB_HOOKS_DIR/README" ]]; then
+        cat > "$CB_HOOKS_DIR/README" 2>/dev/null <<'EOF'
+certberus hooks
+===============
+Spustitelne skripty (chmod +x) v <event>.d/ se zavolaji pri dane udalosti
+(podobne run-parts). Soubory s priponou .example, .bak, .disabled se ignoruji.
+
+Promenne v prostredi hook skriptu:
+  CA_EVENT             nazev udalosti (renewed, installed, errored, ...)
+  CA_PRIMARY_DOMAIN    primarni domena
+  CA_DOMAIN_LIST       cely seznam domen (oddelovac mezera)
+  CA_WEBSERVER         apache | nginx | tomcat
+  CA_SOURCE            mod_md | certbot | certberus
+
+Per-hook timeout je CB_HOOK_TIMEOUT (default 60s).
+
+Priklad: po obnoveni reloadnout HAProxy
+  cat > post-reload.d/30-reload-haproxy.sh <<'SH'
+  #!/bin/bash
+  systemctl reload haproxy
+  SH
+  chmod +x post-reload.d/30-reload-haproxy.sh
+EOF
+    fi
+    # Permissions (config.env muze obsahovat HMAC tajenku - 0600 root-only)
+    [[ -f "$CB_CONFIG_FILE" ]] && chmod 0600 "$CB_CONFIG_FILE" 2>/dev/null
+    [[ -f "$CB_ADVANCED_FILE" ]] && chmod 0600 "$CB_ADVANCED_FILE" 2>/dev/null
+    chmod 0700 "$CB_PREFIX" 2>/dev/null
+    return 0
+}
+
+# Persistuje --email / --domain / --ca pro pristi spusteni do config.env.
+# Volame az pri uspesnem cmd_auto kdy admin neuvedl config (typicky bundle).
+# Nikdy neprepisuje existujici hodnoty - jen doplni chybejici klice.
+cb_persist_config_skeleton() {
+    [[ "$(id -u 2>/dev/null)" == "0" ]] || return 0
+    [[ -f "$CB_CONFIG_FILE" ]] && return 0  # uz existuje, neprepisovat
+    local email="${1:-}" domains="${2:-}" ca="${3:-letsencrypt}"
+    [[ -z "$email" ]] && return 0  # bez emailu nema smysl psat
+    mkdir -p "$(dirname "$CB_CONFIG_FILE")" 2>/dev/null || return 0
+    umask 077
+    cat > "$CB_CONFIG_FILE" <<EOF
+# /etc/certberus/config.env - automaticky vygenerovano $(date '+%F %T')
+# Zde uvedene hodnoty pouzije 'certberus auto' (cron, systemd timer).
+# Edituj rucne, podporovane klice viz config/config.env.example v zdrojich.
+
+CB_EMAIL="$email"
+CB_DOMAINS="$domains"
+CB_CA="$ca"
+
+# CB_WEBSERVER=auto       # auto | apache | nginx | tomcat
+# CB_STAGING=0            # 1 = LE staging (testovani)
+# CB_AUTO_ROLLBACK=1      # 1 = pri selhani vratit snapshot Apache configu
+
+# HARICA / ZeroSSL EAB:
+# CB_EAB_KID=""
+# CB_EAB_HMAC=""
+# CB_ACME_URL=""          # HARICA: https://acme.harica.gr/<UUID>/directory
+EOF
+    chmod 0600 "$CB_CONFIG_FILE" 2>/dev/null
+    cb_ok "Vygenerovano $CB_CONFIG_FILE (mod 0600)"
+    cb_log "  Pristi 'certberus auto' uz nepotrebuje --email/--domain."
+}
+
 # Ochrana proti typickemu omylu: admin nechal v config.env placeholder
 # HARICA URL, ale CB_CA=letsencrypt. Bez teto ochrany certberus posilal
 # LE volani na HARICA endpoint a certbot selhaval s "requires EAB".
