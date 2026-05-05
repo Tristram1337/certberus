@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        format: [tarball, deb, rpm, apk]
+        format: [tarball, deb, rpm, apk, bundle]
     steps:
       - uses: actions/checkout@v4
 
@@ -74,7 +74,7 @@ jobs:
       - name: Consolidate into dist/
         run: |
           mkdir -p dist
-          find dist-raw -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) \
+          find dist-raw -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.bundle' \) \
             -exec cp {} dist/ \;
           ls -lh dist/
 
@@ -97,7 +97,7 @@ jobs:
       - name: Consolidate
         run: |
           mkdir -p dist
-          find dist-raw -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) \
+          find dist-raw -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.bundle' \) \
             -exec cp {} dist/ \;
           # Generate checksums
           cd dist && sha256sum * > SHA256SUMS
@@ -111,6 +111,7 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/*.apk
+            dist/*.bundle
             dist/SHA256SUMS
           generate_release_notes: true
           draft: false
