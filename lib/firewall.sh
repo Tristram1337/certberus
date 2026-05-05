@@ -158,7 +158,9 @@ cb_firewall_ensure_http_https() {
 # Certberus to automatically open the local firewall. We keep webroot/HTTP-01
 # preparation in place, but firewall mutations are opt-in for HARICA.
 cb_firewall_acme_auto_open_enabled() {
-    [[ "${CB_FIREWALL_AUTO_OPEN:-1}" == "1" ]] || return 1
+    # Default OFF: certberus does not have to be the only firewall guardian (managed FW,
+    # site rules, fail2ban, ...). Admin opt-in: --firewall / CB_FIREWALL_AUTO_OPEN=1.
+    [[ "${CB_FIREWALL_AUTO_OPEN:-0}" == "1" ]] || return 1
 
     if [[ "${CB_CA:-}" == "harica" && "${CB_HARICA_FIREWALL_AUTO_OPEN:-0}" != "1" ]]; then
         if [[ -z "${_CB_HARICA_FIREWALL_WARNED:-}" ]]; then
