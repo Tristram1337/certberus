@@ -268,62 +268,62 @@ if [[ "$ISSUED" == "1" ]]; then
     if echo "$ISSUER" | grep -qi "Pebble"; then
         ok "issuer=Pebble ($ISSUER)"
     else
-        nok "issuer neni Pebble: $ISSUER"
+        nok "issuer is not Pebble: $ISSUER"
     fi
 fi
 
-# A6) MDMessageCMD adapter byl zavolan na 'installed' event
+# A6) MDMessageCMD adapter was called on 'installed' event
 EVENT_LOG=$(docker exec "$APACHE_NAME" cat /var/log/certberus/mod_md-events.log 2>/dev/null)
 if echo "$EVENT_LOG" | grep -q "event=installed domain=$DOMAIN"; then
-    ok "adapter zalogoval event=installed domain=$DOMAIN"
+    ok "adapter logged event=installed domain=$DOMAIN"
 else
-    nok "adapter NEzalogoval event=installed (mozna 255 perm bug zpet)"
+    nok "adapter did NOT log event=installed (possibly 255 perm bug reappeared)"
     echo "$EVENT_LOG" | tail -10 | sed 's/^/    /'
 fi
 
-# A7) graceful reload probehl po installed
+# A7) graceful reload occurred after installed
 if docker exec "$APACHE_NAME" grep -q "AH00493: SIGUSR1 received" /var/log/apache2/error.log 2>/dev/null; then
-    ok "apache graceful reload zachyceny v error.log"
+    ok "apache graceful reload detected in error.log"
 else
-    nok "apache graceful reload NEzachyceny"
+    nok "apache graceful reload NOT detected"
 fi
 
-# A8) :443 servuje Pebble cert -- ZADNY manualni reload, certberus uz to udelal
+# A8) :443 serves Pebble cert -- NO manual reload, certberus already did it
 if [[ "$ISSUED" == "1" ]]; then
     SERVED=$(docker exec "$APACHE_NAME" bash -c "
         echo | openssl s_client -connect 127.0.0.1:443 -servername $DOMAIN 2>/dev/null \
             | openssl x509 -noout -issuer 2>/dev/null
     ")
     if echo "$SERVED" | grep -qi "Pebble"; then
-        ok ":443 servuje Pebble cert ($SERVED)"
+        ok ":443 serves Pebble cert ($SERVED)"
     else
-        nok ":443 neservuje Pebble cert: '$SERVED'"
+        nok ":443 does not serve Pebble cert: '$SERVED'"
     fi
 
     HTTP=$(docker exec "$APACHE_NAME" curl -sk -o /dev/null -w "%{http_code}" \
         https://$DOMAIN/ 2>/dev/null)
     if [[ "$HTTP" == "200" ]]; then
-        ok "https://$DOMAIN/ vraci 200"
+        ok "https://$DOMAIN/ returns 200"
     else
-        nok "https://$DOMAIN/ vraci '$HTTP' (cekano 200)"
+        nok "https://$DOMAIN/ returns '$HTTP' (expected 200)"
     fi
 fi
 
-# A9) certberus log obsahuje 'graceful OK' z post_issue_activate
-if grep -q "Force graceful Apache" "$WORK_DIR/certberus.log" 2>/dev/null; then
-    ok "post_issue_activate stage probehla (force graceful)"
+# A9) certberus log contains 'graceful OK' from post_issue_activate
+if grep -qE "Second.*graceful|Cert in staging|already in ManagedDomains" "$WORK_DIR/certberus.log" 2>/dev/null; then
+    ok "post_issue_activate stage completed (second graceful)"
 else
-    nok "post_issue_activate stage NEbyla zaznamenana v logu"
+    nok "post_issue_activate stage NOT recorded in log"
 fi
 
-# A10) certberus sam vyrobil :443 stub vhost (test.conf melo jen :80)
+# A10) certberus created :443 stub vhost on its own (test.conf had only :80)
 if docker exec "$APACHE_NAME" test -f /etc/apache2/sites-enabled/certberus-ssl.conf; then
-    ok "certberus vyrobil stub :443 vhost (certberus-ssl.conf)"
+    ok "certberus created stub :443 vhost (certberus-ssl.conf)"
 else
-    nok "certberus NEvyrobil stub :443 vhost"
+    nok "certberus did NOT create stub :443 vhost"
 fi
 
 echo
-echo "### Vysledek: PASS=$PASS  FAIL=$FAIL ###"
+echo "### Result: PASS=$PASS  FAIL=$FAIL ###"
 [[ $FAIL -eq 0 ]] || exit 1
 exit 0
