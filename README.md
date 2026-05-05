@@ -58,6 +58,20 @@ Uninstall: `sudo ./install.sh --uninstall` (config and logs are preserved).
 
 ### B) Single-file binary (drop-in, no install)
 
+Pre-built binary is attached to every GitHub Release:
+
+```bash
+# Latest release
+curl -fsSLo certberus \
+  https://github.com/Tristram1337/certberus/releases/latest/download/certberus-0.1.0.bundle
+chmod +x certberus
+sudo install -m 0755 certberus /usr/local/sbin/certberus
+
+sudo certberus interactive
+```
+
+Or build it yourself from source:
+
 ```bash
 git clone https://github.com/Tristram1337/certberus.git
 cd certberus

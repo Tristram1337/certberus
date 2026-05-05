@@ -2,7 +2,7 @@
 # build/build.sh - master build entry point for certberus
 # Usage:
 #   bash build/build.sh all                 # all formats
-#   bash build/build.sh tarball|deb|rpm|apk
+#   bash build/build.sh tarball|deb|rpm|apk|bundle
 #   bash build/build.sh clean
 #   bash build/build.sh sync-version        # writes VERSION into bin/certberus
 #   bash build/build.sh smoke-test          # installs artifacts in Docker and verifies
@@ -126,6 +126,16 @@ smoke_test() {
 }
 
 cmd="${1:-all}"
+build_bundle() {
+    say "Building single-file bundle certberus-$VERSION.bundle"
+    bash "$SCRIPT_DIR/bundle.sh"
+    # bundle.sh produces dist/certberus - rename for the release artifact
+    if [[ -f "$DIST_DIR/certberus" ]]; then
+        mv "$DIST_DIR/certberus" "$DIST_DIR/certberus-$VERSION.bundle"
+        ok "$DIST_DIR/certberus-$VERSION.bundle"
+    fi
+}
+
 case "$cmd" in
     all)
         clean
@@ -133,6 +143,7 @@ case "$cmd" in
         build_deb
         build_rpm
         build_apk
+        build_bundle
         say "Done. Artifacts in $DIST_DIR:"
         ls -lh "$DIST_DIR"
         ;;
@@ -140,11 +151,12 @@ case "$cmd" in
     deb)     build_deb ;;
     rpm)     build_rpm ;;
     apk)     build_apk ;;
+    bundle)  build_bundle ;;
     clean)   clean ;;
     sync-version) sync_version ;;
     smoke-test)   smoke_test ;;
     -h|--help|help)
         sed -n '2,8p' "$0"
         ;;
-    *) die "Neznamy prikaz: $cmd (pouzij: all|tarball|deb|rpm|apk|clean|smoke-test)" ;;
+    *) die "Unknown command: $cmd (use: all|tarball|deb|rpm|apk|bundle|clean|smoke-test)" ;;
 esac
