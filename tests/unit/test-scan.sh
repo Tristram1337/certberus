@@ -94,4 +94,62 @@ out_help=$(cb_scan --help 2>&1); rc=$?
 assert_exit_code 0 "$rc" "--help rc 0"
 assert_contains "$out_help" "format" "help mentions --format"
 
+# ---- Test 7: password-protected certificates MUST NOT hang the scan ------
+# Regression: pred fixem v0.1.8 'certberus scan' padal kdyz narazil na
+# .p12 s heslem -- openssl pkcs12 vyvolal interaktivni prompt ktery cekal
+# na /dev/tty a cely scan visel.
+PWPROT="$(t_mktempdir pwprot)"
+# encrypted PEM private key (PKCS#8 with passphrase)
+openssl genrsa 2048 2>/dev/null \
+    | openssl pkcs8 -topk8 -v2 aes-256-cbc -passout pass:secret \
+        -out "$PWPROT/encrypted.key.pem" 2>/dev/null
+# locked p12 + open p12 + changeit p12
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=pw.test" \
+    -keyout "$PWPROT/k.pem" -out "$PWPROT/c.pem" >/dev/null 2>&1
+openssl pkcs12 -export -in "$PWPROT/c.pem" -inkey "$PWPROT/k.pem" \
+    -passout pass:secret -out "$PWPROT/locked.p12" 2>/dev/null
+openssl pkcs12 -export -in "$PWPROT/c.pem" -inkey "$PWPROT/k.pem" \
+    -passout pass: -out "$PWPROT/open.p12" 2>/dev/null
+openssl pkcs12 -export -in "$PWPROT/c.pem" -inkey "$PWPROT/k.pem" \
+    -passout pass:changeit -out "$PWPROT/changeit.p12" 2>/dev/null
+
+# CB_SCAN_PATHS na sandbox; CB_SCAN_ROOT prazdny aby config refs nehledali
+# v hlavnim filesystemu
+CB_SCAN_PATHS_ORIG="$CB_SCAN_PATHS"
+export CB_SCAN_PATHS="$PWPROT"
+unset CB_SCAN_ROOT
+
+# Run with a 15s timeout. Before the fix, the timeout expired = TEST FAIL.
+# </dev/null is critical: this simulates cron / non-interactive execution where
+# openssl prompt would fail with "could not read passphrase" instead of hanging, BUT
+# the user had scan from a TTY so openssl found /dev/tty and blocked.
+t_log() { :; } 2>/dev/null
+t_log "scan on password-protected certs with 15s timeout"
+START_TS=$(date +%s)
+out_pw=$(timeout 15 bash -c '
+    source "$1"
+    cb_scan --format tsv --no-config --no-listen
+' _ "$CB_REPO_ROOT/lib/scan.sh" </dev/null 2>&1)
+rc_pw=$?
+DUR=$(( $(date +%s) - START_TS ))
+
+assert_exit_code 0 "$rc_pw" "scan completed over password-protected files (rc=0, not timeout)"
+[[ "$DUR" -lt 15 ]] \
+    && t_pass "scan finished under 15s ($DUR s) -- no prompt hang" \
+    || t_fail "scan took $DUR s -- likely prompt hang"
+
+# Correct classification
+assert_contains "$out_pw" "pem-key-encrypted" "encrypted PEM key labeled as pem-key-encrypted"
+assert_contains "$out_pw" "pkcs12-encrypted"  "locked.p12 labeled as pkcs12-encrypted"
+# open.p12 (empty password) and changeit.p12 must be parsed
+echo "$out_pw" | grep -q "open.p12.*pkcs12.*pw.test" \
+    && t_pass "passwordless p12 parsed (CN=pw.test)" \
+    || t_fail "passwordless p12 NOT parsed" "$(echo "$out_pw" | grep open.p12)"
+echo "$out_pw" | grep -q "changeit.p12.*pkcs12.*pw.test" \
+    && t_pass "changeit p12 parsed (CN=pw.test)" \
+    || t_fail "changeit p12 NOT parsed" "$(echo "$out_pw" | grep changeit.p12)"
+
+# Restore
+export CB_SCAN_PATHS="$CB_SCAN_PATHS_ORIG"
+
 t_summary
