@@ -382,28 +382,29 @@ CB_CA="$ca"
 # CB_ACME_URL=""          # HARICA: https://acme.harica.gr/<UUID>/directory
 EOF
     chmod 0600 "$CB_CONFIG_FILE" 2>/dev/null
-    cb_ok "Vygenerovano $CB_CONFIG_FILE (mod 0600)"
-    cb_log "  Pristi 'certberus auto' uz nepotrebuje --email/--domain."
+    cb_ok "Generated $CB_CONFIG_FILE (mod 0600)"
+    cb_log "  Next 'certberus auto' no longer needs --email/--domain."
 }
 
-# Ochrana proti typickemu omylu: admin nechal v config.env placeholder
-# HARICA URL, ale CB_CA=letsencrypt. Bez teto ochrany certberus posilal
-# LE volani na HARICA endpoint a certbot selhaval s "requires EAB".
-# Pouzivame guard, aby se warning nedubloval pri dvojim nacteni (parent + child).
+# Guard against a common mistake: admin left a placeholder HARICA URL
+# in config.env but CB_CA=letsencrypt. Without this guard, certberus sent
+# LE calls to the HARICA endpoint and certbot failed with "requires EAB".
+# Uses a guard to prevent duplicate warnings across parent/child loading.
 cb_sanitize_acme_url() {
-    [[ -n "${_CB_ACME_URL_SANITIZED:-}" ]] && return 0
     local url="${CB_ACME_URL:-}"
     if [[ -z "$url" ]]; then
-        _CB_ACME_URL_SANITIZED=1
-        export _CB_ACME_URL_SANITIZED
         return 0
     fi
-    # Placeholder (napr. '.../acme/..../directory') → zahodit.
+    # Placeholder (e.g. '.../acme/..../directory') -> discard.
+    # Deduplicate warning for same value across parent/child processes (export).
     if [[ "$url" == *".../"* || "$url" == *"VAS_UUID"* || "$url" == *"YOUR_UUID"* ]]; then
-        cb_warn "CB_ACME_URL contains a placeholder ($url), discarding."
+        if [[ "${_CB_ACME_URL_WARNED:-}" != "$url" ]]; then
+            cb_warn "CB_ACME_URL contains a placeholder ($url), discarding."
+            _CB_ACME_URL_WARNED="$url"
+            export _CB_ACME_URL_WARNED
+        fi
         CB_ACME_URL=""
-        _CB_ACME_URL_SANITIZED=1
-        export _CB_ACME_URL_SANITIZED CB_ACME_URL
+        export CB_ACME_URL
         return 0
     fi
     # CA / URL mismatch: if LE but URL points elsewhere, discard and use default.
@@ -427,8 +428,7 @@ cb_sanitize_acme_url() {
             fi
             ;;
     esac
-    _CB_ACME_URL_SANITIZED=1
-    export _CB_ACME_URL_SANITIZED CB_ACME_URL
+    export CB_ACME_URL
 }
 
 # -------- Retry wrapper --------
