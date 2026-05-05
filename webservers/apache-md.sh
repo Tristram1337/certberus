@@ -498,10 +498,18 @@ stage_install_hook_adapter() {
     cb_sep
     cb_log "Instaluji MDMessageCMD adapter -> $CB_MOD_MD_HOOK_SCRIPT"
     if [[ "$CB_DRY_RUN" == "0" ]]; then
-        mkdir -p "$(dirname "$CB_MOD_MD_HOOK_SCRIPT")"
+        local hook_dir; hook_dir="$(dirname "$CB_MOD_MD_HOOK_SCRIPT")"
+        mkdir -p "$hook_dir"
+        # /opt/certberus i parent musi byt traverzovatelny pro www-data;
+        # jinak Apache (bezici jako www-data) MDMessageCMD volat nemuze
+        # a mod_md hlasi 'failed with exit code 255' = permission denied.
+        chmod 0755 "$hook_dir" 2>/dev/null || true
         cb_mod_md_adapter_body > "$CB_MOD_MD_HOOK_SCRIPT"
-        chmod +x "$CB_MOD_MD_HOOK_SCRIPT"
+        # 0750 + group www-data = root muze editovat, www-data muze cist+exec
+        chmod 0750 "$CB_MOD_MD_HOOK_SCRIPT"
         chown root:www-data "$CB_MOD_MD_HOOK_SCRIPT" 2>/dev/null || true
+        # CB_MOD_MD_DIR (mod_md store) zustava 0700 root:root - to apache
+        # nepotrebuje, mod_md tam zapisuje cesty pres jiny mechanismus.
     fi
     cb_ok "Hook adapter OK"
 }
