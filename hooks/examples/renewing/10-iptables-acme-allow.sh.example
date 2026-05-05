@@ -1,0 +1,14 @@
+#!/bin/bash
+# 10-iptables-acme-allow.sh.example
+# Example: on renewal start, allow ACME validators access to port 80 even past fail2ban.
+# Usage: /etc/certberus/hooks/renewing.d/10-iptables-acme-allow.sh
+# (Runs before mod_md calls the ACME server for HTTP-01 challenge.)
+# Counterpart is in installed.d/10-iptables-acme-revoke.sh
+
+COMMENT="certberus-acme-challenge"
+
+if ! iptables -C INPUT -p tcp --dport 80 -j ACCEPT -m comment --comment "$COMMENT" 2>/dev/null; then
+    iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT -m comment --comment "$COMMENT"
+    logger -t certberus-hook "ACME: temporarily opened port 80 (${CA_PRIMARY_DOMAIN:-?})"
+fi
+exit 0

@@ -1,0 +1,22 @@
+# Build artefakty
+dist/
+*.deb
+*.rpm
+*.apk
+*.tar.gz
+SHA256SUMS
+
+# Test leftovers
+tests/.tmp/
+/tmp/certberus-*
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logy pri lokalnim vyvoji
+*.log
