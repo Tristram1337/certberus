@@ -175,7 +175,7 @@ _cb_scan_probe_listener() {
     local out
     out=$(timeout 5 openssl s_client -servername "$host" -connect "$host:$port" \
             </dev/null 2>/dev/null \
-            | openssl x509 -noout -subject -issuer -dates 2>/dev/null) || return 1
+            | timeout 3 openssl x509 -noout -subject -issuer -dates 2>/dev/null) || return 1
     [[ -z "$out" ]] && return 1
     local subj iss notafter
     subj=$(echo "$out" | sed -n 's/^subject= *//p')
@@ -208,24 +208,92 @@ _cb_scan_active_listeners() {
     done <<<"$out"
 }
 
-# Parsuje X.509 cert ze souboru. Vstup muze byt PEM/DER/PKCS#12/JKS.
+# Parses X.509 cert from a file. Input can be PEM/DER/PKCS#12/JKS.
 # Outputs: <kind>\t<subject>\t<issuer>\t<notAfter>\t<sha256-fp>\t<sans>
 # kind: pem|der|pkcs12|jks|encrypted|unknown
+#
+# IMPORTANT: ALL openssl invocations must have </dev/null + timeout, otherwise
+# scan hangs on password-protected files (openssl pkcs12 / x509 /
+# rsa can read password from /dev/tty). Before fix, 'certberus scan' hung when
+# it hit a cert/key with password -- openssl prompt blocked the entire run.
+# We use heredoc-style </dev/null so openssl detects closed stdin
+# and instead of prompting immediately exits with an error (which we swallow
+# via 2>&1 and ignore).
 _cb_scan_parse_cert_file() {
     local f="$1"
     [[ -r "$f" ]] || { printf '%s\t%s\t%s\t%s\t%s\t%s\n' unreadable - - - - -; return; }
 
+    # Size - extremely large files (>16MB) are skipped, x509 store /
+    # CRL bundles are not of interest and would hurt performance.
+    local sz
+    sz=$(stat -c '%s' "$f" 2>/dev/null || echo 0)
+    if [[ "$sz" =~ ^[0-9]+$ ]] && (( sz > 16777216 )); then
+        printf 'too-large\t-\t-\t-\t-\t-\n'; return
+    fi
+
     local first
     first=$(head -c 4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
 
+    # PKCS#12 / JKS detection by extension MUST be BEFORE DER check, otherwise .p12
+    # (starts with 30 82 just like DER cert) passes through the DER branch as 'der-unknown'
+    # and more importantly openssl x509 -inform DER can in openssl 3.x trigger a PKCS#12
+    # password prompt on /dev/tty.
+    case "$f" in
+        *.p12|*.pfx)
+            local txt try_pass
+            for try_pass in '' 'changeit' 'password'; do
+                txt=$(timeout 5 openssl pkcs12 -in "$f" -nokeys -passin "pass:$try_pass" -nomacver </dev/null 2>/dev/null \
+                      | timeout 5 openssl x509 -noout -subject -issuer -enddate 2>/dev/null)
+                [[ -n "$txt" ]] && break
+            done
+            if [[ -n "$txt" ]]; then
+                printf 'pkcs12\t%s\t%s\t%s\t-\t-\n' \
+                    "$(echo "$txt"|sed -n 's/^subject= *//p'|head -1)" \
+                    "$(echo "$txt"|sed -n 's/^issuer= *//p'|head -1)" \
+                    "$(echo "$txt"|sed -n 's/^notAfter= *//p'|head -1)"
+            else
+                printf 'pkcs12-encrypted\t-\t-\t-\t-\t(password-protected, use openssl pkcs12 -in %s)\n' "$f"
+            fi
+            return
+            ;;
+        *.jks|*.keystore)
+            if command -v keytool >/dev/null 2>&1; then
+                local lst try_pass
+                for try_pass in 'changeit' 'password' ''; do
+                    lst=$(timeout 5 keytool -list -keystore "$f" -storepass "${try_pass:-changeit}" </dev/null 2>/dev/null \
+                          | grep -E 'Owner:|Issuer:|Valid from:' | head -10)
+                    [[ -n "$lst" ]] && break
+                done
+                if [[ -n "$lst" ]]; then
+                    printf 'jks\t-\t-\t-\t-\t%s\n' "$(echo "$lst" | tr '\n' ';' )"
+                else
+                    printf 'jks-encrypted\t-\t-\t-\t-\t(password-protected, try keytool -list -keystore %s)\n' "$f"
+                fi
+            else
+                printf 'jks\t-\t-\t-\t-\t(keytool not installed)\n'
+            fi
+            return
+            ;;
+    esac
+
     # PEM (---)
     if head -1 "$f" 2>/dev/null | grep -q -- '-----BEGIN'; then
-        # Mozna je v souboru jen klic. Zkusime cert nejdriv.
+        # Detect ENCRYPTED block: Proc-Type: 4,ENCRYPTED (PKCS#1) or
+        # BEGIN ENCRYPTED PRIVATE KEY (PKCS#8). openssl x509 ignores these,
+        # but better to report them so they appear in the output.
+        local has_encrypted_block=0
+        if grep -q -E -- '-----BEGIN ENCRYPTED PRIVATE KEY-----|^Proc-Type: 4,ENCRYPTED' "$f" 2>/dev/null; then
+            has_encrypted_block=1
+        fi
+        # Maybe the file only contains a key. Try cert first.
+        # </dev/null + timeout 5: if openssl wanted to read passphrase for any
+        # reason (corrupted PEM, atypical encrypted cert), it does not wait.
         local txt
-        txt=$(openssl x509 -in "$f" -noout -subject -issuer -enddate -fingerprint -sha256 -ext subjectAltName 2>/dev/null)
+        txt=$(timeout 5 openssl x509 -in "$f" -noout -subject -issuer -enddate -fingerprint -sha256 -ext subjectAltName </dev/null 2>/dev/null)
         if [[ -z "$txt" ]]; then
-            # Klic, dh params...
-            if grep -q 'PRIVATE KEY' "$f" 2>/dev/null; then
+            if (( has_encrypted_block )); then
+                printf 'pem-key-encrypted\t-\t-\t-\t-\t(password-protected key, scan skipped)\n'
+            elif grep -q 'PRIVATE KEY' "$f" 2>/dev/null; then
                 printf 'pem-key\t-\t-\t-\t-\t-\n'
             else
                 printf 'pem-other\t-\t-\t-\t-\t-\n'
@@ -245,7 +313,7 @@ _cb_scan_parse_cert_file() {
     # DER (starts with 30 82 ... ASN.1 SEQUENCE)
     if [[ "${first:0:4}" == "3082" ]]; then
         local txt
-        txt=$(openssl x509 -inform DER -in "$f" -noout -subject -issuer -enddate -fingerprint -sha256 2>/dev/null)
+        txt=$(timeout 5 openssl x509 -inform DER -in "$f" -noout -subject -issuer -enddate -fingerprint -sha256 </dev/null 2>/dev/null)
         if [[ -n "$txt" ]]; then
             local subj iss notafter fp
             subj=$(echo "$txt" | sed -n 's/^subject= *//p' | head -1)
@@ -258,40 +326,6 @@ _cb_scan_parse_cert_file() {
         printf 'der-unknown\t-\t-\t-\t-\t-\n'
         return
     fi
-
-    # PKCS#12 (.p12 .pfx) - bin format, magic ze souboru je tezky; spolehame na priponu
-    case "$f" in
-        *.p12|*.pfx)
-            # Bez hesla otevreme jen pokud je passwordless
-            local txt
-            txt=$(openssl pkcs12 -in "$f" -nokeys -passin pass: -nomacver 2>/dev/null \
-                  | openssl x509 -noout -subject -issuer -enddate 2>/dev/null)
-            if [[ -n "$txt" ]]; then
-                printf 'pkcs12\t%s\t%s\t%s\t-\t-\n' \
-                    "$(echo "$txt"|sed -n 's/^subject= *//p'|head -1)" \
-                    "$(echo "$txt"|sed -n 's/^issuer= *//p'|head -1)" \
-                    "$(echo "$txt"|sed -n 's/^notAfter= *//p'|head -1)"
-            else
-                printf 'pkcs12\t-\t-\t-\t-\t(password-protected, use openssl pkcs12 -in %s)\n' "$f"
-            fi
-            return
-            ;;
-        *.jks|*.keystore)
-            if command -v keytool >/dev/null 2>&1; then
-                local lst
-                lst=$(keytool -list -keystore "$f" -storepass changeit 2>/dev/null \
-                      | grep -E 'Owner:|Issuer:|Valid from:' | head -10)
-                if [[ -n "$lst" ]]; then
-                    printf 'jks\t-\t-\t-\t-\t%s\n' "$(echo "$lst" | tr '\n' ';' )"
-                else
-                    printf 'jks\t-\t-\t-\t-\t(password-protected, try keytool -list -keystore %s)\n' "$f"
-                fi
-            else
-                printf 'jks\t-\t-\t-\t-\t(keytool not installed)\n'
-            fi
-            return
-            ;;
-    esac
 
     printf 'unknown\t-\t-\t-\t-\t-\n'
 }
