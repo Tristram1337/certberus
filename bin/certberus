@@ -10,7 +10,7 @@
 #
 set -uo pipefail
 
-CB_VERSION="0.1.12"
+CB_VERSION="0.1.13"
 
 # Locate libraries - dev mode (repo) or installed mode
 _SELF_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -343,7 +343,7 @@ cmd_test_domain() {
     cb_log "DNS A:     ${a6:-<none>}"
     cb_log "DNS AAAA:  ${aaaa:-<none>}"
 
-    local match=0
+    local match=0 port80_ok=1
     if cb_domain_points_here "$d"; then
         cb_ok "Domain points to this server."
         match=1
@@ -377,6 +377,7 @@ cmd_test_domain() {
             cb_ok "Port 80: reachable (ACME HTTP-01 should work)"
         else
             cb_warn "Port 80: unreachable from outside — ACME HTTP-01 will fail"
+            port80_ok=0
         fi
     fi
     cb_sep
@@ -403,7 +404,12 @@ cmd_test_domain() {
         fi
     fi
 
-    [[ "$match" == "1" ]] && return 0 || return 1
+    if [[ "$match" != "1" ]]; then
+        return 1
+    elif [[ "$port80_ok" != "1" ]]; then
+        return 2
+    fi
+    return 0
 }
 
 # -------- Command: expiry --------
@@ -442,7 +448,9 @@ cmd_expiry() {
             _print_cert_expiry "$name" "$cert"
         done
     fi
-    (( any == 0 )) && cb_warn "Zadne certifikaty nenalezeny."
+    if (( any == 0 )); then
+        cb_warn "No certificates found."
+    fi
 }
 
 _print_cert_expiry() {

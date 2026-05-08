@@ -78,38 +78,38 @@ cb_firewall_open_port() {
         firewalld)
             firewall-cmd --permanent --add-port="${port}/${proto}" >/dev/null 2>&1 && \
             firewall-cmd --reload >/dev/null 2>&1 && \
-            cb_ok "firewalld: port $proto/$port otevren"
+            cb_ok "firewalld: port $proto/$port opened"
             ;;
         ufw)
             ufw allow "${port}/${proto}" >/dev/null 2>&1 && \
-            cb_ok "ufw: port $proto/$port otevren"
+            cb_ok "ufw: port $proto/$port opened"
             ;;
         nftables)
-            # Idempotent: nejdriv check zda pravidlo uz je
-            if nft list ruleset 2>/dev/null | grep -qE "${proto} dport ${port}.*accept"; then
-                cb_debug "nftables: $proto/$port uz otevren"
+            # Idempotent: check both set syntax (e.g. "dport { 80, 443 }")
+            if nft list ruleset 2>/dev/null | grep -qE "${proto} dport (${port}|[{][^}]*\b${port}\b[^}]*[}]).*accept"; then
+                cb_debug "nftables: $proto/$port already open"
                 return 0
             fi
-            # Zkus najit existujici chain input v inet filter
+            # insert (not add) - rules must be placed before catch-all drop
             if nft list table inet filter >/dev/null 2>&1; then
-                nft add rule inet filter input "$proto" dport "$port" accept 2>/dev/null && \
-                cb_ok "nftables: port $proto/$port otevren (runtime)" || \
-                cb_warn "nftables: nepodarilo se pridat pravidlo"
-                cb_warn "Poznamka: pro trvalost pridejte radek do /etc/nftables.conf"
+                nft insert rule inet filter input "$proto" dport "$port" accept 2>/dev/null && \
+                cb_ok "nftables: port $proto/$port opened (runtime)" || \
+                cb_warn "nftables: failed to add rule"
+                cb_warn "Note: for persistence, add the rule to /etc/nftables.conf"
             else
-                cb_warn "nftables: tabulka 'inet filter' neexistuje, preskakuji"
+                cb_warn "nftables: table 'inet filter' does not exist, skipping"
             fi
             ;;
         iptables-nft|iptables-legacy)
             if iptables -C INPUT -p "$proto" --dport "$port" -j ACCEPT \
                 -m comment --comment "$comment" 2>/dev/null; then
-                cb_debug "iptables: $proto/$port uz otevren"
+                cb_debug "iptables: $proto/$port already open"
                 return 0
             fi
             iptables -I INPUT -p "$proto" --dport "$port" -j ACCEPT \
                 -m comment --comment "$comment" && \
-            cb_ok "iptables: port $proto/$port otevren"
-            # Persistent save (pokud dostupne)
+            cb_ok "iptables: port $proto/$port opened"
+            # Persistent save (if available)
             if command -v netfilter-persistent >/dev/null 2>&1; then
                 netfilter-persistent save >/dev/null 2>&1 || true
             elif command -v iptables-save >/dev/null 2>&1 && [[ -d /etc/iptables ]]; then
@@ -180,52 +180,85 @@ cb_firewall_ensure_http_https_for_acme() {
     cb_firewall_ensure_http_https
 }
 
-# Tomcat helper: redirect 80 -> 8080 (jen firewalld/iptables/nft).
+# Tomcat helper: redirect 80 -> 8080 (firewalld/iptables/nft only).
+# After DNAT, dport changes to the target port, so the input chain must
+# accept the target port - otherwise packets are dropped.
 cb_firewall_redirect_80_to() {
     local target="${1:-8080}"
     case "$CB_FW_BACKEND" in
         firewalld)
             firewall-cmd --permanent \
                 --add-forward-port=port=80:proto=tcp:toport="$target" >/dev/null 2>&1 && \
+            firewall-cmd --permanent --add-port="${target}/tcp" >/dev/null 2>&1 && \
             firewall-cmd --reload >/dev/null 2>&1 && \
-            cb_ok "firewalld: redirect 80 -> $target"
+            cb_ok "firewalld: redirect 80 -> $target (+ accept $target)"
             ;;
         iptables-nft|iptables-legacy)
             iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT \
                 --to-port "$target" 2>/dev/null || \
             iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT \
                 --to-port "$target"
-            cb_ok "iptables nat: redirect 80 -> $target"
-            cb_warn "Pro trvalost uloz: iptables-save nebo netfilter-persistent save"
+            if ! iptables -C INPUT -p tcp --dport "$target" -j ACCEPT \
+                -m comment --comment "certberus-redirect" 2>/dev/null; then
+                iptables -I INPUT -p tcp --dport "$target" -j ACCEPT \
+                    -m comment --comment "certberus-redirect"
+            fi
+            cb_ok "iptables nat: redirect 80 -> $target (+ accept $target)"
+            cb_warn "For persistence save: iptables-save or netfilter-persistent save"
             ;;
         nftables)
-            # Zjisti, zda uz prerouting chain existuje
+            # Check if prerouting chain already exists
             local chain_exists=0
             nft list chain ip nat prerouting >/dev/null 2>&1 && chain_exists=1
             if (( chain_exists == 0 )); then
                 nft 'add table ip nat' 2>/dev/null || true
                 nft 'add chain ip nat prerouting { type nat hook prerouting priority -100 ; }' 2>/dev/null || true
             fi
-            # Idempotently add rule (if not present)
+            # Idempotently add redirect rule
             if ! nft list chain ip nat prerouting 2>/dev/null | grep -qE "tcp dport 80 redirect to :?$target\b"; then
                 if nft "add rule ip nat prerouting tcp dport 80 redirect to :$target" 2>/dev/null; then
                     cb_ok "nftables: redirect 80 -> $target (runtime)"
-                    cb_warn "Pro trvalost pridejte odpovidajici radek do /etc/nftables.conf"
                 else
-                    cb_warn "nftables redirect selhal - pridejte rucne:"
+                    cb_warn "nftables redirect failed - add manually:"
                     cb_warn "  table ip nat { chain prerouting { type nat hook prerouting priority -100;"
                     cb_warn "                  tcp dport 80 redirect to :$target } }"
                     return 1
                 fi
             else
-                cb_ok "nftables: redirect 80 -> $target (uz existuje)"
+                cb_ok "nftables: redirect 80 -> $target (already exists)"
             fi
+            # After DNAT, packets arrive at input with dport=target - must be accepted
+            _cb_nft_ensure_input_accept tcp "$target"
             ;;
         *)
-            cb_warn "Redirect 80->${target} neni podporovan pro $CB_FW_BACKEND"
+            cb_warn "Redirect 80->${target} is not supported for $CB_FW_BACKEND"
             return 1
             ;;
     esac
+}
+
+# Helper: idempotently add accept rule to nftables input chain.
+# Searches both inet filter input and ip filter input (different distros).
+_cb_nft_ensure_input_accept() {
+    local proto="$1" port="$2"
+    if nft list ruleset 2>/dev/null | grep -qE "${proto} dport (${port}|[{][^}]*\b${port}\b[^}]*[}]).*accept"; then
+        cb_debug "nftables: $proto/$port already accepted in input"
+        return 0
+    fi
+    local family chain_found=0
+    for family in inet ip; do
+        if nft list chain "$family" filter input >/dev/null 2>&1; then
+            nft insert rule "$family" filter input "$proto" dport "$port" accept 2>/dev/null && \
+                chain_found=1 && break
+        fi
+    done
+    if (( chain_found )); then
+        cb_ok "nftables: accept $proto/$port added to input chain (runtime)"
+        cb_warn "For persistence, add the rule to /etc/nftables.conf"
+    else
+        cb_warn "nftables: input chain not found for accept $proto/$port"
+        cb_warn "Verify manually: nft list ruleset, and add accept rule for port $port"
+    fi
 }
 
 # -------- Snapshot --------
