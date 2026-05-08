@@ -221,7 +221,7 @@ cb_snapshot() {
         return 0
     fi
     tmp="${dest}.partial"
-    local tar_err; tar_err=$(mktemp 2>/dev/null || echo "/tmp/tar-err.$$")
+    local tar_err; tar_err=$(mktemp 2>/dev/null || mktemp -t cb-tar-err.XXXXXX 2>/dev/null || echo "/dev/null")
     # Trap for signal-based cleanup of .partial file on SIGTERM/SIGINT
     local _cb_snap_cleanup="rm -f \"$tmp\" \"$tar_err\" 2>/dev/null"
     trap "$_cb_snap_cleanup; trap - INT TERM HUP" INT TERM HUP
@@ -360,27 +360,32 @@ cb_persist_config_skeleton() {
     [[ "$(id -u 2>/dev/null)" == "0" ]] || return 0
     [[ -f "$CB_CONFIG_FILE" ]] && return 0  # already exists, do not overwrite
     local email="${1:-}" domains="${2:-}" ca="${3:-letsencrypt}"
+    local eab_kid="${4:-}" eab_hmac="${5:-}" acme_url="${6:-}"
     [[ -z "$email" ]] && return 0  # no email means nothing to write
     mkdir -p "$(dirname "$CB_CONFIG_FILE")" 2>/dev/null || return 0
     umask 077
-    cat > "$CB_CONFIG_FILE" <<EOF
-# /etc/certberus/config.env - automaticky vygenerovano $(date '+%F %T')
-# Zde uvedene hodnoty pouzije 'certberus auto' (cron, systemd timer).
-# Edituj rucne, podporovane klice viz config/config.env.example v zdrojich.
-
-CB_EMAIL="$email"
-CB_DOMAINS="$domains"
-CB_CA="$ca"
-
-# CB_WEBSERVER=auto       # auto | apache | nginx | tomcat
-# CB_STAGING=0            # 1 = LE staging (testovani)
-# CB_AUTO_ROLLBACK=1      # 1 = pri selhani vratit snapshot Apache configu
-
-# HARICA / ZeroSSL EAB:
-# CB_EAB_KID=""
-# CB_EAB_HMAC=""
-# CB_ACME_URL=""          # HARICA: https://acme.harica.gr/<UUID>/directory
-EOF
+    {
+        printf '# /etc/certberus/config.env - auto-generated %s\n' "$(date '+%F %T')"
+        printf '# These values are used by '\''certberus auto'\'' (cron, systemd timer).\n\n'
+        printf 'CB_EMAIL="%s"\n' "$email"
+        printf 'CB_DOMAINS="%s"\n' "$domains"
+        printf 'CB_CA="%s"\n' "$ca"
+        echo
+        printf '# CB_WEBSERVER=auto       # auto | apache | nginx | tomcat\n'
+        printf '# CB_STAGING=0            # 1 = LE staging (testing)\n'
+        printf '# CB_AUTO_ROLLBACK=1      # 1 = on failure, restore Apache config snapshot\n'
+        echo
+        if [[ -n "$eab_kid" ]]; then
+            printf 'CB_EAB_KID="%s"\n' "$eab_kid"
+            printf 'CB_EAB_HMAC="%s"\n' "$eab_hmac"
+            [[ -n "$acme_url" ]] && printf 'CB_ACME_URL="%s"\n' "$acme_url"
+        else
+            printf '# HARICA / ZeroSSL EAB:\n'
+            printf '# CB_EAB_KID=""\n'
+            printf '# CB_EAB_HMAC=""\n'
+            printf '# CB_ACME_URL=""          # HARICA: https://acme.harica.gr/<UUID>/directory\n'
+        fi
+    } > "$CB_CONFIG_FILE"
     chmod 0600 "$CB_CONFIG_FILE" 2>/dev/null
     cb_ok "Generated $CB_CONFIG_FILE (mod 0600)"
     cb_log "  Next 'certberus auto' no longer needs --email/--domain."
