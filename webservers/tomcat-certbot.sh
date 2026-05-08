@@ -122,6 +122,23 @@ parse_args() {
 }
 
 # ============================================================================
+_CB_TOMCAT_ORIG_ROOT_XML=""
+
+_cb_tomcat_restore_root_context() {
+    local ctx_dir="$TOMCAT_CONF_DIR/Catalina/localhost"
+    local root_xml="$ctx_dir/ROOT.xml"
+    [[ -f "$root_xml" ]] || return 0
+    if grep -q 'certberus' "$root_xml" 2>/dev/null || grep -q 'docBase="/var/www/acme"' "$root_xml" 2>/dev/null; then
+        if [[ -n "$_CB_TOMCAT_ORIG_ROOT_XML" && -f "$_CB_TOMCAT_ORIG_ROOT_XML" ]]; then
+            mv "$_CB_TOMCAT_ORIG_ROOT_XML" "$root_xml"
+            cb_ok "ROOT.xml restored from backup"
+        else
+            rm -f "$root_xml"
+            cb_ok "Temporary ACME ROOT.xml removed"
+        fi
+    fi
+}
+
 # Detect Tomcat instance
 # ============================================================================
 stage_prepare() {
@@ -339,28 +356,22 @@ for c in root.iter('Connector'):
             chown -R "$TOMCAT_USER:" "$TOMCAT_ACME_WEBROOT" 2>/dev/null || true
             chmod -R 755 "$TOMCAT_ACME_WEBROOT" 2>/dev/null
 
-            # Nejcistsi: pridat Context mapovani v $TOMCAT_CONF_DIR/Catalina/localhost/acme.xml
-            # NOTE: applies to default Host; for multiple Hosts you need to do this for each
             local ctx_dir="$TOMCAT_CONF_DIR/Catalina/localhost"
             mkdir -p "$ctx_dir"
-            cat > "$ctx_dir/acme.xml.new" <<EOF
+            local root_xml="$ctx_dir/ROOT.xml"
+            _CB_TOMCAT_ORIG_ROOT_XML=""
+            if [[ -f "$root_xml" ]]; then
+                _CB_TOMCAT_ORIG_ROOT_XML="$root_xml.certberus-bak"
+                cp "$root_xml" "$_CB_TOMCAT_ORIG_ROOT_XML"
+                cb_log "Zaloha puvodniho ROOT.xml -> ${_CB_TOMCAT_ORIG_ROOT_XML}"
+            fi
+            cat > "$root_xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
-<Context docBase="$TOMCAT_ACME_WEBROOT" path="/.well-known/acme-challenge"
-         reloadable="false">
-    <!-- Certberus ACME challenge context - generovano -->
-</Context>
-EOF
-            # NOTE: Tomcat Context path must not contain dots or special chars;
-            # pro .well-known pouzijeme workaround - servirujeme cely webroot root Context
-            # a ACME challenge pujde pres URI. Nejprakticteji: root Context.
-            cat > "$ctx_dir/ROOT-certberus-acme.xml.new" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- Certberus: docasny root Context pro ACME challenge.
-     NOTE: if you have an existing ROOT webapp, comment out/rename it before issuing cert. -->
 <Context docBase="$TOMCAT_ACME_WEBROOT" path="" reloadable="false"/>
 EOF
-            cb_warn "Pro ACME webroot je treba ROOT Context mapovany na $TOMCAT_ACME_WEBROOT"
-            cb_warn "Pokud mate existujici ROOT webapp, skript neprepise - precti si $ctx_dir/*.new"
+            cb_ok "ACME webroot context deploy: $root_xml"
+            # Tomcat autoDeploy scanuje kazdych ~10s; pockame az context nacte
+            sleep 12
             ;;
         proxy)
             cb_log "Port80 strategy 'proxy': assuming reverse proxy (nginx/Apache)"
@@ -388,7 +399,8 @@ stage_install_deploy_hook() {
 # Certberus certbot deploy hook for Tomcat - auto-generated.
 set -u
 LOG="/var/log/certberus/certbot-tomcat.log"
-mkdir -p "\$(dirname "\$LOG")" 2>/dev/null
+mkdir -p "\$(dirname "\$LOG")" 2>/dev/null || true
+[[ -w "\$(dirname "\$LOG")" ]] || LOG="/dev/null"
 TS="[\$(date '+%F %T')]"
 SSL_DIR="$CB_TOMCAT_SSL_DIR"
 SERVICE="$TOMCAT_SERVICE"
@@ -427,12 +439,20 @@ export CA_CERT_PATH="\$RENEWED_LINEAGE/fullchain.pem"
 export CA_KEY_PATH="\$RENEWED_LINEAGE/privkey.pem"
 export CA_SOURCE="certbot"
 
+HOOK_TO="\${CB_HOOK_TIMEOUT:-60}"
+HAVE_TO=0; command -v timeout >/dev/null 2>&1 && HAVE_TO=1
 for ev in renewed post-deploy; do
     D="/etc/certberus/hooks/\${ev}.d"
     [[ -d "\$D" ]] || continue
-    if command -v run-parts >/dev/null; then
-        run-parts --regex '^[0-9a-zA-Z][0-9a-zA-Z._-]*[0-9a-zA-Z]\$' "\$D" >> "\$LOG" 2>&1 || true
-    fi
+    for f in "\$D"/*; do
+        [[ -x "\$f" ]] || continue
+        case "\$f" in *.example|*.bak|*.disabled) continue ;; esac
+        if (( HAVE_TO )); then
+            timeout "\$HOOK_TO" "\$f" >> "\$LOG" 2>&1 || true
+        else
+            "\$f" >> "\$LOG" 2>&1 || true
+        fi
+    done
 done
 
 # Atomic restart with rollback
@@ -512,6 +532,9 @@ stage_issue_cert() {
         fi
     done
     cb_ok "All certs issued"
+
+    # Clean up temporary ACME ROOT context
+    _cb_tomcat_restore_root_context
 
     local primary="${VALID_DOMAINS[0]}"
     cb_hook_set_cert "$CB_TOMCAT_SSL_DIR/$primary/fullchain.pem" \

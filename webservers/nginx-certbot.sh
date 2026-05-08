@@ -42,6 +42,35 @@ CB_ACME_URL="${CB_ACME_URL:-}"
 CB_EAB_REQUIRED="${CB_EAB_REQUIRED:-0}"
 VALID_DOMAINS=()
 
+# Reads existing certbot renewal config for a domain.
+# Returns two lines on stdout: authenticator and webroot_path.
+# Returns 1 if the renewal config does not exist.
+_cb_read_certbot_renewal() {
+    local domain="$1"
+    local conf="/etc/letsencrypt/renewal/${domain}.conf"
+    [[ -f "$conf" && -s "$conf" ]] || return 1
+
+    local auth="" wrpath=""
+    auth=$(grep -E '^\s*authenticator\s*=' "$conf" 2>/dev/null | head -1 | sed 's/.*=\s*//' | tr -d '[:space:]')
+
+    if [[ "$auth" == "webroot" ]]; then
+        wrpath=$(awk '
+            /^\[\[webroot\]\]/ { in_wr=1; next }
+            /^\[/              { in_wr=0 }
+            in_wr && /=/ {
+                sub(/^[^=]*=\s*/, "")
+                gsub(/[[:space:],]/, "")
+                print
+                exit
+            }
+        ' "$conf" 2>/dev/null)
+        [[ -z "$wrpath" ]] && wrpath=$(grep -E '^\s*webroot_path\s*=' "$conf" 2>/dev/null | head -1 | sed 's/.*=\s*//' | tr -d '[:space:]' | tr -d ',')
+    fi
+
+    printf '%s\n%s\n' "$auth" "$wrpath"
+    return 0
+}
+
 usage() {
     cat <<USAGE
 nginx-certbot.sh - nginx + certbot webroot + Let's Encrypt / HARICA
@@ -384,7 +413,8 @@ stage_install_deploy_hook() {
 # Certberus certbot deploy hook for nginx - generated, do not edit.
 # Invoked by certbot after successful cert renewal.
 LOG="/var/log/certberus/certbot-renewal.log"
-mkdir -p "$(dirname "$LOG")" 2>/dev/null
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+[[ -w "$(dirname "$LOG")" ]] || LOG="/dev/null"
 TS="[$(date '+%F %T')]"
 echo "$TS Renewed: $RENEWED_DOMAINS ($RENEWED_LINEAGE)" >> "$LOG" 2>/dev/null
 command -v logger >/dev/null && logger -t certberus-nginx "renewal: $RENEWED_DOMAINS"
@@ -399,12 +429,20 @@ export CA_KEY_PATH="$RENEWED_LINEAGE/privkey.pem"
 export CA_SOURCE="certbot"
 
 # Run certberus hooks renewed.d and post-deploy.d
+HOOK_TO="${CB_HOOK_TIMEOUT:-60}"
+HAVE_TO=0; command -v timeout >/dev/null 2>&1 && HAVE_TO=1
 for ev in renewed post-deploy; do
     D="/etc/certberus/hooks/${ev}.d"
     [[ -d "$D" ]] || continue
-    if command -v run-parts >/dev/null; then
-        run-parts --regex '^[0-9a-zA-Z][0-9a-zA-Z._-]*[0-9a-zA-Z]$' "$D" >> "$LOG" 2>&1 || true
-    fi
+    for f in "$D"/*; do
+        [[ -x "$f" ]] || continue
+        case "$f" in *.example|*.bak|*.disabled) continue ;; esac
+        if (( HAVE_TO )); then
+            timeout "$HOOK_TO" "$f" >> "$LOG" 2>&1 || true
+        else
+            "$f" >> "$LOG" 2>&1 || true
+        fi
+    done
 done
 
 reload_nginx() {
@@ -474,46 +512,49 @@ stage_issue_cert() {
         [[ -n "$CB_EAB_KID" && -n "$CB_EAB_HMAC" ]] || cb_die "CA $CB_CA requires EAB"
     fi
 
-    local args=(certonly --webroot -w "$CB_NGINX_WEBROOT" \
-                --email "$CB_EMAIL" --agree-tos --no-eff-email \
-                --non-interactive --keep-until-expiring)
-    [[ -n "$acme_url" ]] && args+=(--server "$acme_url")
-    [[ "$CB_EAB_REQUIRED" == "1" ]] && args+=(--eab-kid "$CB_EAB_KID" --eab-hmac-key "$CB_EAB_HMAC")
-    [[ "$CB_DRY_RUN" == "1" ]] && args+=(--dry-run)
+    # Common args for all certbot invocations
+    local -a common_args=(--email "$CB_EMAIL" --agree-tos --no-eff-email \
+                          --non-interactive --keep-until-expiring)
+    [[ -n "$acme_url" ]] && common_args+=(--server "$acme_url")
+    [[ "$CB_EAB_REQUIRED" == "1" ]] && common_args+=(--eab-kid "$CB_EAB_KID" --eab-hmac-key "$CB_EAB_HMAC")
+    [[ "$CB_DRY_RUN" == "1" ]] && common_args+=(--dry-run)
 
-    # --cert-name zafixuje nazev certifikatu na primarni domenu → certbot nebude
-    # hadat podle existujicich renewal.conf a nezmatene pri multi-SAN vystaveni.
-    local primary_d="${VALID_DOMAINS[0]}"
-    args+=(--cert-name "$primary_d")
-    # --expand resi pripad, ze nektera z VALID_DOMAINS uz ma samostatny cert a
-    # my ji chceme zahrnout jako SAN do primarniho certu. Bez nej certbot selze
-    # na interaktivni dotaz "Do you want to expand and replace this existing certificate?".
-    if (( ${#VALID_DOMAINS[@]} > 1 )); then
-        args+=(--expand)
+    # Detect availability of certbot-nginx plugin (for new domains)
+    local _cb_has_nginx_plugin=0
+    if certbot plugins 2>/dev/null | grep -q 'nginx'; then
+        _cb_has_nginx_plugin=1
     fi
 
-    local d
+    # Group domains by existing certbot authenticator.
+    # Domains with the same (authenticator, webroot_path) go into one certbot invocation.
+    # New domains (without renewal config) use --nginx if the plugin is available,
+    # otherwise fall back to --webroot with CB_NGINX_WEBROOT.
+    local -a group_keys=()
+    declare -A domain_groups=()
+    local d auth_info auth wrpath group_key
     for d in "${VALID_DOMAINS[@]}"; do
-        args+=(-d "$d")
-    done
-
-    # Detekce zmeny CA: pokud existuje validni cert pro primarni domenu od jineho issuera,
-    # certbot s --keep-until-expiring by nikdy nezmenil issuera (CA-swap selze tichym no-op).
-    # V takovem pripade pridame --force-renewal, abychom cert vystavili u nove CA.
-    local live_cert="/etc/letsencrypt/live/$primary_d/fullchain.pem"
-    if [[ -f "$live_cert" ]]; then
-        local cur_issuer wanted_issuer_re=""
-        cur_issuer=$(openssl x509 -in "$live_cert" -noout -issuer 2>/dev/null || true)
-        case "$CB_CA" in
-            letsencrypt) wanted_issuer_re='Let.?s Encrypt' ;;
-            harica)      wanted_issuer_re='HARICA|Hellenic|GEANT|CESNET' ;;
-            zerossl)     wanted_issuer_re='ZeroSSL' ;;
-        esac
-        if [[ -n "$wanted_issuer_re" && -n "$cur_issuer" ]] && ! echo "$cur_issuer" | grep -qiE "$wanted_issuer_re"; then
-            cb_warn "Existujici cert pro $primary_d je od jine CA (issuer: $cur_issuer). Vynucuji --force-renewal pro prechod na $CB_CA."
-            args+=(--force-renewal)
+        if auth_info=$(_cb_read_certbot_renewal "$d"); then
+            auth=$(printf '%s' "$auth_info" | sed -n '1p')
+            wrpath=$(printf '%s' "$auth_info" | sed -n '2p')
+        else
+            auth=""
+            wrpath=""
         fi
-    fi
+        if [[ -z "$auth" ]]; then
+            if (( _cb_has_nginx_plugin )); then
+                auth="nginx"
+            else
+                auth="webroot"
+            fi
+        fi
+        [[ "$auth" == "webroot" && -z "$wrpath" ]] && wrpath="$CB_NGINX_WEBROOT"
+        group_key="${auth}:${wrpath}"
+        if [[ -z "${domain_groups[$group_key]:-}" ]]; then
+            group_keys+=("$group_key")
+        fi
+        domain_groups["$group_key"]="${domain_groups[$group_key]:-} $d"
+        cb_debug "Domain $d: authenticator=$auth webroot=$wrpath"
+    done
 
     # Before the actual certbot request:
     #  - remove our self-signed placeholders (certbot would reject with "live directory exists")
@@ -529,17 +570,73 @@ stage_issue_cert() {
         fi
     done
 
-    cb_log "certbot ${args[*]}"
-    # NOTE: certbot 4.x returns exit 0 even when authorization failed.
-    # cb_certbot_issue overi fyzicky vystup (existence cert file + mtime).
-    local primary="${VALID_DOMAINS[0]}"
-    if ! cb_retry "${CB_RETRY_COUNT:-3}" "${CB_RETRY_DELAY:-10}" cb_certbot_issue "$primary" "${args[@]}"; then
-        cb_die "certbot selhal"
-    fi
-    cb_ok "Certifikat vydan"
-    cb_hook_set_cert "/etc/letsencrypt/live/$primary/fullchain.pem" \
-                    "/etc/letsencrypt/live/$primary/privkey.pem" \
-                    "$CB_CA"
+    # Issue certs for each group
+    for group_key in "${group_keys[@]}"; do
+        local group_auth="${group_key%%:*}"
+        local group_wrpath="${group_key#*:}"
+        local -a group_domains=(${domain_groups[$group_key]})
+
+        local -a args=(certonly)
+        case "$group_auth" in
+            nginx)      args+=(--nginx) ;;
+            standalone) args+=(--standalone) ;;
+            *)          args+=(--webroot -w "$group_wrpath") ;;
+        esac
+        args+=("${common_args[@]}")
+
+        # --cert-name fixes the certificate name to the primary domain
+        local primary_d="${group_domains[0]}"
+        args+=(--cert-name "$primary_d")
+        if (( ${#group_domains[@]} > 1 )); then
+            args+=(--expand)
+        fi
+
+        for d in "${group_domains[@]}"; do
+            args+=(-d "$d")
+        done
+
+        # Detect CA change or staging->production transition
+        local live_cert="/etc/letsencrypt/live/$primary_d/fullchain.pem"
+        if [[ -f "$live_cert" ]]; then
+            local cur_issuer force_renew=0
+            cur_issuer=$(openssl x509 -in "$live_cert" -noout -issuer 2>/dev/null || true)
+            # Staging->production: existing cert is staging but we want production
+            if [[ "$CB_STAGING" != "1" ]] && printf '%s' "$cur_issuer" | grep -qiE 'STAGING|FAKE'; then
+                cb_warn "Existing cert for $primary_d is staging (issuer: $cur_issuer). Forcing --force-renewal for production."
+                force_renew=1
+            fi
+            # Production->staging: existing cert is production but we want staging
+            if [[ "$CB_STAGING" == "1" ]] && ! printf '%s' "$cur_issuer" | grep -qiE 'STAGING|FAKE'; then
+                cb_warn "Existing cert for $primary_d is production, but we want staging. Forcing --force-renewal."
+                force_renew=1
+                args+=(--break-my-certs)
+            fi
+            # CA change (e.g. LE->HARICA)
+            if (( force_renew == 0 )); then
+                local wanted_issuer_re=""
+                case "$CB_CA" in
+                    letsencrypt) wanted_issuer_re='Let.?s Encrypt|STAGING|FAKE' ;;
+                    harica)      wanted_issuer_re='HARICA|Hellenic|GEANT|CESNET' ;;
+                    zerossl)     wanted_issuer_re='ZeroSSL' ;;
+                esac
+                if [[ -n "$wanted_issuer_re" && -n "$cur_issuer" ]] && ! printf '%s' "$cur_issuer" | grep -qiE "$wanted_issuer_re"; then
+                    cb_warn "Existing cert for $primary_d is from a different CA (issuer: $cur_issuer). Forcing --force-renewal."
+                    force_renew=1
+                fi
+            fi
+            (( force_renew )) && args+=(--force-renewal)
+        fi
+
+        cb_log "certbot ${args[*]}"
+        if ! cb_retry "${CB_RETRY_COUNT:-3}" "${CB_RETRY_DELAY:-10}" cb_certbot_issue "$primary_d" "${args[@]}"; then
+            cb_die "certbot failed for: ${group_domains[*]}"
+        fi
+        cb_ok "Certificate issued: ${group_domains[*]} (authenticator=$group_auth)"
+        cb_hook_set_cert "/etc/letsencrypt/live/$primary_d/fullchain.pem" \
+                        "/etc/letsencrypt/live/$primary_d/privkey.pem" \
+                        "$CB_CA"
+    done
+
     cb_run_hooks post-issue
 }
 

@@ -25,7 +25,7 @@ assert_match "$ADAPTER_TEXT" '^#!/bin/bash' "shebang"
 assert_contains "$ADAPTER_TEXT" 'set -u' "set -u (strict)"
 assert_contains "$ADAPTER_TEXT" 'HOOKS_DIR="/etc/certberus/hooks"' "HOOKS_DIR const"
 assert_contains "$ADAPTER_TEXT" '${EVENT}.d' "dispatch <event>.d"
-assert_contains "$ADAPTER_TEXT" 'run-parts' "run-parts cesta"
+assert_contains "$ADAPTER_TEXT" '[[ -x "$f" ]]' "manual loop (per-hook exec check)"
 
 # Whitelist
 assert_contains "$ADAPTER_TEXT" 'pre-issue|post-issue' "whitelist: pre/post-issue"

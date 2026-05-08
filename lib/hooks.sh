@@ -149,6 +149,8 @@ export CA_SOURCE="mod_md"
 
 LOG="/var/log/certberus/mod_md-events.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+# Fallback for inaccessible log (non-root, fresh install)
+[[ -w "$(dirname "$LOG")" ]] || LOG="/dev/null"
 {
     echo "[$(date '+%F %T')] event=$EVENT domain=$DOMAIN"
 } >> "$LOG" 2>/dev/null
@@ -164,25 +166,15 @@ HOOK_TO="${CB_HOOK_TIMEOUT:-60}"
 HAVE_TIMEOUT=0
 command -v timeout >/dev/null 2>&1 && HAVE_TIMEOUT=1
 if [[ -d "$D" ]]; then
-    if command -v run-parts >/dev/null 2>&1; then
+    for f in "$D"/*; do
+        [[ -x "$f" ]] || continue
+        case "$f" in *.example|*.bak|*.disabled) continue ;; esac
         if (( HAVE_TIMEOUT )); then
-            timeout "$HOOK_TO" run-parts --regex '^[0-9a-zA-Z][0-9a-zA-Z._-]*[0-9a-zA-Z]$' "$D" \
-                >> "$LOG" 2>&1 || true
+            timeout "$HOOK_TO" "$f" >> "$LOG" 2>&1 || true
         else
-            run-parts --regex '^[0-9a-zA-Z][0-9a-zA-Z._-]*[0-9a-zA-Z]$' "$D" \
-                >> "$LOG" 2>&1 || true
+            "$f" >> "$LOG" 2>&1 || true
         fi
-    else
-        for f in "$D"/*; do
-            [[ -x "$f" ]] || continue
-            case "$f" in *.example|*.bak|*.disabled) continue ;; esac
-            if (( HAVE_TIMEOUT )); then
-                timeout "$HOOK_TO" "$f" >> "$LOG" 2>&1 || true
-            else
-                "$f" >> "$LOG" 2>&1 || true
-            fi
-        done
-    fi
+    done
 fi
 
 # Auto-graceful Apache on renewed/installed - without this, Apache would not
