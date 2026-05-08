@@ -353,27 +353,30 @@ EOF
     return 0
 }
 
-# Persistuje --email / --domain / --ca pro pristi spusteni do config.env.
-# Volame az pri uspesnem cmd_auto kdy admin neuvedl config (typicky bundle).
-# Nikdy neprepisuje existujici hodnoty - jen doplni chybejici klice.
+# Persists --email / --domain / --ca for the next run into config.env.
+# Called on successful cmd_auto when admin did not provide config (typically bundle).
+# Never overwrites existing values - only fills in missing keys.
 cb_persist_config_skeleton() {
-    [[ "$(id -u 2>/dev/null)" == "0" ]] || return 0
-    [[ -f "$CB_CONFIG_FILE" ]] && return 0  # uz existuje, neprepisovat
+    if [[ "$(id -u 2>/dev/null)" != "0" ]]; then
+        cb_warn "Saving config.env requires root. Run as root (sudo)."
+        return 1
+    fi
+    [[ -f "$CB_CONFIG_FILE" ]] && return 0  # already exists, do not overwrite
     local email="${1:-}" domains="${2:-}" ca="${3:-letsencrypt}"
     local eab_kid="${4:-}" eab_hmac="${5:-}" acme_url="${6:-}"
-    [[ -z "$email" ]] && return 0  # bez emailu nema smysl psat
+    [[ -z "$email" ]] && return 0  # no email means nothing to write
     mkdir -p "$(dirname "$CB_CONFIG_FILE")" 2>/dev/null || return 0
     umask 077
     {
-        printf '# /etc/certberus/config.env - automaticky vygenerovano %s\n' "$(date '+%F %T')"
-        printf '# Zde uvedene hodnoty pouzije '\''certberus auto'\'' (cron, systemd timer).\n\n'
+        printf '# /etc/certberus/config.env - auto-generated %s\n' "$(date '+%F %T')"
+        printf '# These values are used by '\''certberus auto'\'' (cron, systemd timer).\n\n'
         printf 'CB_EMAIL="%s"\n' "$email"
         printf 'CB_DOMAINS="%s"\n' "$domains"
         printf 'CB_CA="%s"\n' "$ca"
         echo
         printf '# CB_WEBSERVER=auto       # auto | apache | nginx | tomcat\n'
-        printf '# CB_STAGING=0            # 1 = LE staging (testovani)\n'
-        printf '# CB_AUTO_ROLLBACK=1      # 1 = pri selhani vratit snapshot Apache configu\n'
+        printf '# CB_STAGING=0            # 1 = LE staging (testing)\n'
+        printf '# CB_AUTO_ROLLBACK=1      # 1 = on failure, restore Apache config snapshot\n'
         echo
         if [[ -n "$eab_kid" ]]; then
             printf 'CB_EAB_KID="%s"\n' "$eab_kid"
