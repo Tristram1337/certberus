@@ -14,11 +14,11 @@ Verze: 0.1.17
 | CentOS Stream | 9 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only, HARICA validation) |
 | Fedora | 42 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only, 2-SAN, prod cert) |
 | Fedora | 43 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only) |
-| Debian | 12 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only) |
-| Debian | 13 | x86_64 | <ip> | *.example.com | **PASS** (nginx, apache-md, tomcat, certbot-only, hooks) |
+| Debian | 12 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only, nginx-certbot, prod cert, ext. SSL ✓) |
+| Debian | 13 | x86_64 | <ip> | *.example.com | **PASS** (nginx, apache-md, tomcat, certbot-only, hooks, prod cert, ext. SSL ✓) |
 | Ubuntu | 22.04 LTS | x86_64 | <ip> | *.example.com | **PASS** (nginx, certbot-only) |
 | Ubuntu | 24.04 LTS | x86_64 | <ip> | *.example.com | **PASS** (apache-md, tomcat, certbot-only) |
-| Ubuntu | 25.10 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only) |
+| Ubuntu | 25.10 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only, nginx-certbot, prod cert, ext. SSL ✓) |
 | Debian | 13 | x86_64 | example.com | — | **PASS** (HARICA real cert, /tmp noexec) |
 | Rocky Linux | 10.0 | x86_64 | — | — | **PASS** (previous testing v0.1.15-v0.1.17) |
 | CentOS Stream | 10 | x86_64 | — | — | **PASS** (previous testing) |
@@ -67,7 +67,7 @@ Verze: 0.1.17
 | certbot-only (standalone) | Vsechny (12 serveru) | PASS | LE staging certy vydany na vsech |
 | certbot-only (webroot) | Ubuntu 22.04 | PASS (drive) | |
 | certbot-only (port 80 obsazeny, bez webroot) | Ubuntu 22.04 | PASS (spravne odmitne) | |
-| nginx-certbot | Debian 13, Ubuntu 22.04 | PASS | nginx auto-install, cert, reload |
+| nginx-certbot | Debian 12, Debian 13, Ubuntu 22.04, Ubuntu 25.10 | PASS | nginx auto-install, cert, reload |
 | apache-md | Debian 13, Ubuntu 24.04 | PASS | mod_md async polling, cert v domains/ |
 | tomcat-certbot | Debian 13, Ubuntu 24.04 | **PASS** | **PRVNI REAL HW TEST** — server.xml, HTTPS :443 |
 | apache-md-eab | — | NETESTOVANO | Vyzaduje HARICA + Apache |
@@ -149,9 +149,24 @@ Verze: 0.1.17
 
 | Test | OS | Status |
 |------|----|--------|
-| Detekce staging certu, force-renewal | Rocky 8, Fedora 42 | PASS |
-| Produkcni LE cert (issuer R12) | Rocky 8 | PASS |
-| Produkcni LE cert (issuer E7) | Fedora 42 | PASS |
+| Staging cert detection, force-renewal | Rocky 8, Fedora 42 | PASS |
+| Production LE cert (issuer R12) | Rocky 8 | PASS |
+| Production LE cert (issuer E7) | Fedora 42, Debian 12, Debian 13 | PASS |
+| Production LE cert (issuer E8) | Ubuntu 25.10 | PASS |
+
+### End-to-end external verification (openssl s_client from example.com)
+
+| Server | Domain | Cert | Verify return code |
+|--------|--------|------|--------------------|
+| Rocky 8 | r8-prod.example.com | LE R12 (prod) | **0 (ok)** |
+| Fedora 42 | f42-prod.example.com | LE E7 (prod) | **0 (ok)** |
+| Debian 12 | d12-prod.example.com | LE E7 (prod) | **0 (ok)** |
+| Debian 13 | d13-prod.example.com | LE E7 (prod) | **0 (ok)** |
+| Ubuntu 25.10 | u25-prod.example.com | LE E8 (prod) | **0 (ok)** |
+| Rocky 8 | r8-e2e-full.example.com | LE staging | accessible |
+| Fedora 42 | f42-e2e-full.example.com | LE staging | accessible |
+| Debian 12 | d12-nginx-e2e.example.com | LE staging | accessible |
+| Ubuntu 25.10 | u25-nginx-e2e.example.com | LE staging | accessible |
 
 ### EPEL auto-install
 
@@ -230,7 +245,7 @@ Verze: 0.1.17
 | 14 | EPEL neni auto-enablovano (RHEL/CentOS/Alma/Rocky) | `lib/os.sh` | `cb_pkg_install` automaticky `dnf install epel-release` |
 | 15 | cmd_auto nepersistuje EAB credentials do config.env | `bin/certberus` | Predani CLI_EAB_KID/HMAC/ACME_URL do `cb_persist_config_skeleton` |
 
-### Pozorovani z tohoto testu (zadne nove bugy)
+### Pozorovani z tohoto testu
 
 | # | Popis | Hodnoceni |
 |---|-------|-----------|
@@ -238,6 +253,7 @@ Verze: 0.1.17
 | — | 1GB RAM servery (Rocky 9, Alma 9, CentOS 9) OOM pri `dnf install certbot` | Neni bug — nedostatek RAM. Reseno pridanim swapu. |
 | — | HARICA EAB credentials jsou single-use pro registraci uctu | Neni bug certberus — HARICA ACME server chrani EAB pred znovupouzitim. |
 | — | Config.env z HARICA testu (CB_CA=harica, CB_ACME_URL) pretrvava a ovlivni dalsi beh s --staging | Potencialni UX problem. CLI --staging by mel ignorovat CB_ACME_URL z config.env kdyz neni --ca harica. |
+| **16** | **Ubuntu 25.10: /var/www ma permissions 700** — nginx worker (www-data) nemuze cist webroot pro ACME challenge. `nginx-certbot` modul vytvori `/var/www/acme` ale neoveruje traversovatelnost rodicovskeho adresare. | **BUG** — `nginx-certbot.sh` by mel `chmod 755 /var/www` nebo alespon zkontrolovat. Na Debian 12/13 a starsich Ubuntu je /var/www defaultne 755. |
 
 ## Zname limitace
 
@@ -255,12 +271,13 @@ Verze: 0.1.17
 | Testovanych platforem | 12 (+ 5 z drivejska = 17 celkem) |
 | Novych platforem | Fedora 42, Fedora 43, Rocky 8, Alma 8/9, Debian 12 |
 | Unikatnich OS verzi | 10 |
-| Staging certu vydano | 14 |
-| Produkcnich certu vydano | 2 (Rocky 8, Fedora 42) |
+| Staging certu vydano | 18 |
+| Produkcnich certu vydano | 5 (Rocky 8, Fedora 42, Debian 12, Debian 13, Ubuntu 25.10) |
+| Ext. SSL overeni (Verify: 0 ok) | 5/5 produkcnich, 4/4 staging |
 | Tomcat modulu otestovano | 2 (Debian 13, Ubuntu 24.04) — PRVNI REAL HW TEST |
 | SELinux Enforcing serveru | 7 (vsechny RHEL, 0 AVC denials) |
 | Hook testu | 11 (post-issue, timeout, filtering, on-rollback) |
 | Firewall backendu otestovano | 4 (iptables legacy, iptables nf_tables, firewalld, nftables) |
 | Unit testu | 16 pass, 0 fail |
 | Chaos testu | 7 pass |
-| Novych bugu nalezeno | 0 |
+| Novych bugu nalezeno | 1 (#16: Ubuntu 25.10 /var/www 700) |
