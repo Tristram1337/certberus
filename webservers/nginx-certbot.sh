@@ -132,7 +132,13 @@ stage_prepare() {
     # Detect nginx document root (if --webroot was not specified explicitly)
     if [[ -z "$CB_NGINX_WEBROOT" ]]; then
         CB_NGINX_WEBROOT=$(nginx -T 2>/dev/null \
-            | awk '/^[[:space:]]*server[[:space:]]*\{/{in_s=1} in_s && /listen.*80/{has80=1} in_s && /root[[:space:]]/{r=$2; gsub(/;/,"",r)} in_s && /\}/{if(has80 && r) {print r; exit}; in_s=0; has80=0; r=""}')
+            | awk '
+            /^[[:space:]]*#/ { next }
+            /\{/ { depth++; if (depth==1 && /server[[:space:]]*\{/) { in_s=1; has80=0; r="" } }
+            in_s && depth==1 && /listen[[:space:]]/ && /80/ { has80=1 }
+            in_s && depth==1 && /^[[:space:]]*root[[:space:]]/ { r=$2; gsub(/;/,"",r) }
+            /\}/ { if (in_s && depth==1 && has80 && r) { print r; exit }; if (depth==1) { in_s=0 }; depth-- }
+            ')
         [[ -z "$CB_NGINX_WEBROOT" ]] && CB_NGINX_WEBROOT="/var/www/html"
         cb_debug "Nginx document root: $CB_NGINX_WEBROOT"
     fi
