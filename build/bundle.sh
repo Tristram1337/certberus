@@ -87,8 +87,26 @@ HEADER
 # Bootstrap: unpack embedded payloads to a private temp dir
 # ============================================================
 
-CB_BUNDLE_TMP="$(mktemp -d -t certberus-bundle.XXXXXX)" || {
-    echo "[ERR] Cannot create temp dir for bundle." >&2
+# Some environments mount /tmp with noexec (Debian hardening, RHEL).
+# Webserver modules are spawned as subprocesses and must be executable.
+_cb_bundle_tmpdir() {
+    local d
+    for d in /var/tmp /tmp; do
+        local t
+        t=$(mktemp -d "$d/certberus-bundle.XXXXXX" 2>/dev/null) || continue
+        local probe="$t/.exec-test"
+        printf '#!/bin/sh\nexit 0\n' > "$probe"
+        if chmod +x "$probe" 2>/dev/null && "$probe" 2>/dev/null; then
+            rm -f "$probe"
+            echo "$t"
+            return 0
+        fi
+        rm -rf "$t"
+    done
+    return 1
+}
+CB_BUNDLE_TMP="$(_cb_bundle_tmpdir)" || {
+    echo "[ERR] Cannot create exec-capable temp dir (both /var/tmp and /tmp failed)." >&2
     exit 2
 }
 trap 'rm -rf "$CB_BUNDLE_TMP"' EXIT
