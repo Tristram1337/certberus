@@ -48,7 +48,7 @@ both bootstrap `/etc/certberus/` on first run.
 ```bash
 # Bundle (one-shot, no install):
 curl -fsSLo /usr/local/sbin/certberus \
-  https://github.com/Tristram1337/certberus/releases/latest/download/certberus-0.1.6.bundle
+  https://github.com/Tristram1337/certberus/releases/latest/download/certberus.bundle
 chmod +x /usr/local/sbin/certberus
 
 sudo certberus auto --email admin@example.com --domain www.example.com
@@ -239,7 +239,7 @@ Pre-built binary is attached to every GitHub Release:
 ```bash
 # Latest release
 curl -fsSLo certberus \
-  https://github.com/Tristram1337/certberus/releases/latest/download/certberus-0.1.6.bundle
+  https://github.com/Tristram1337/certberus/releases/latest/download/certberus.bundle
 chmod +x certberus
 sudo install -m 0755 certberus /usr/local/sbin/certberus
 
@@ -388,13 +388,29 @@ local interface, use `--skip-dns-check` to bypass the local DNS-points-here chec
 
 ## Supported OS
 
-| OS | Apache | nginx | Tomcat |
-|---|:-:|:-:|:-:|
-| Debian 10 | yes | yes | yes |
-| Debian 11 / 12 | yes | yes | yes |
-| Ubuntu 18.04 | upgrade Apache to 2.4.34+ | yes | yes |
-| Ubuntu 20.04 / 22.04 / 24.04 | yes | yes | yes |
-| Rocky / AlmaLinux 8+ | should work, untested | | |
+Tested end-to-end (staging + production certs, external SSL verification):
+
+| OS | certbot-only | Apache (mod_md) | nginx (certbot) | Tomcat (certbot) | SELinux |
+|---|:-:|:-:|:-:|:-:|:-:|
+| Debian 12 | **yes** | **yes** | **yes** | **yes** | — |
+| Debian 13 (trixie) | **yes** | **yes** | **yes** | **yes** | — |
+| Ubuntu 22.04 LTS | **yes** | **yes** | **yes** | **yes** | — |
+| Ubuntu 24.04 LTS | **yes** | **yes** | **yes** | **yes** | — |
+| Ubuntu 25.10 | **yes** | **yes** | **yes** | **yes** | — |
+| Rocky Linux 8 | **yes** | — | — | — | Enforcing |
+| Rocky Linux 9 | **yes** | — | — | — | Enforcing |
+| AlmaLinux 8 | **yes** | — | — | — | Enforcing |
+| AlmaLinux 9 | **yes** | — | — | — | Enforcing |
+| CentOS Stream 9 | **yes** | — | — | — | Enforcing |
+| Fedora 42 | **yes** | — | — | — | Enforcing |
+| Fedora 43 | **yes** | — | — | — | Enforcing |
+
+Apache, nginx and Tomcat modules are gated to Debian/Ubuntu (they manage distro packages).
+`certbot-only` is universal and works on all supported OS. RHEL-family distros auto-install
+EPEL for certbot (Fedora uses base repos).
+
+Package manager backends exist for **zypper** (openSUSE/SLES) and **apk** (Alpine) but
+are untested on real hardware.
 
 ---
 

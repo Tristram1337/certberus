@@ -253,7 +253,7 @@ Verze: 0.1.17
 | — | 1GB RAM servery (Rocky 9, Alma 9, CentOS 9) OOM pri `dnf install certbot` | Neni bug — nedostatek RAM. Reseno pridanim swapu. |
 | — | HARICA EAB credentials jsou single-use pro registraci uctu | Neni bug certberus — HARICA ACME server chrani EAB pred znovupouzitim. |
 | — | Config.env z HARICA testu (CB_CA=harica, CB_ACME_URL) pretrvava a ovlivni dalsi beh s --staging | Potencialni UX problem. CLI --staging by mel ignorovat CB_ACME_URL z config.env kdyz neni --ca harica. |
-| **16** | **Ubuntu 25.10: /var/www ma permissions 700** — nginx worker (www-data) nemuze cist webroot pro ACME challenge. `nginx-certbot` modul vytvori `/var/www/acme` ale neoveruje traversovatelnost rodicovskeho adresare. | **BUG** — `nginx-certbot.sh` by mel `chmod 755 /var/www` nebo alespon zkontrolovat. Na Debian 12/13 a starsich Ubuntu je /var/www defaultne 755. |
+| **16** | **Ubuntu 25.10: /var/www ma permissions 700** — nginx worker (www-data) nemuze cist webroot pro ACME challenge. `nginx-certbot` modul vytvori `/var/www/acme` ale neoveruje traversovatelnost rodicovskeho adresare. | **OPRAVENO** — `nginx-certbot.sh` stage_prepare nyni `chmod o+rx` na rodice webrootu. |
 
 ## Zname limitace
 
@@ -280,4 +280,4 @@ Verze: 0.1.17
 | Firewall backendu otestovano | 4 (iptables legacy, iptables nf_tables, firewalld, nftables) |
 | Unit testu | 16 pass, 0 fail |
 | Chaos testu | 7 pass |
-| Novych bugu nalezeno | 1 (#16: Ubuntu 25.10 /var/www 700) |
+| Novych bugu nalezeno | 1 (#16: Ubuntu 25.10 /var/www 700 — opraveno) |
