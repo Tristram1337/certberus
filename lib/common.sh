@@ -280,57 +280,65 @@ cb_auto_rollback() {
 
 # -------- Load config files --------
 cb_load_config() {
-    local f
+    local f line key val
     for f in "$CB_ADVANCED_FILE" "$CB_CONFIG_FILE"; do
-        if [[ -r "$f" ]]; then
-            # shellcheck disable=SC1090
-            set -a; source "$f"; set +a
-            cb_debug "Nacteno: $f"
-        fi
+        [[ -r "$f" ]] || continue
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${line// /}" ]] && continue
+            if [[ "$line" =~ ^[[:space:]]*(CB_[A-Za-z0-9_]+)=(.*) ]]; then
+                key="${BASH_REMATCH[1]}"
+                val="${BASH_REMATCH[2]}"
+                val="${val#\"}" ; val="${val%\"}"
+                val="${val#\'}" ; val="${val%\'}"
+                export "$key=$val"
+            fi
+        done < "$f"
+        cb_debug "Loaded: $f"
     done
     cb_sanitize_acme_url
 }
 
 # -------- Self-bootstrap of /etc/certberus/ + hooks layout --------
-# Vola se z bin/certberus po cb_load_config, idempotentni.
-# Klicove pro bundle - bez install.sh by /etc/certberus neexistovalo a
-# mod_md adapter (/opt/certberus/mod_md-adapter.sh) by hooky neumel najit.
-# Preskakuje pri non-root (read-only smoke test, --help, version).
-# Vytvori kostru i kdyz uz existuje cast - prida jen chybejici adresare.
+# Called from bin/certberus after cb_load_config, idempotent.
+# Key for bundle - without install.sh /etc/certberus would not exist and
+# the mod_md adapter (/opt/certberus/mod_md-adapter.sh) could not find hooks.
+# Skipped for non-root (read-only smoke test, --help, version).
+# Creates skeleton even if parts exist - only adds missing directories.
 cb_ensure_runtime_dirs() {
     [[ "$(id -u 2>/dev/null)" == "0" ]] || return 0
     local d
-    # Hlavni adresare (logy/state/backups - common.sh stejne sam vytvari pri prvnim logu, ale at jsou pri ruce)
+    # Main directories (logs/state/backups - common.sh creates them on first log anyway, but let's have them ready)
     for d in "$CB_PREFIX" "$CB_HOOKS_DIR" "$CB_LOG_DIR" "$CB_STATE_DIR" "$CB_BACKUP_DIR"; do
-        [[ -d "$d" ]] || mkdir -p "$d" 2>/dev/null || cb_debug "Nelze vytvorit $d"
+        [[ -d "$d" ]] || mkdir -p "$d" 2>/dev/null || cb_debug "Cannot create $d"
     done
-    # Hook event adresare. mod_md emituje: renewing, renewed, installed, errored,
-    # ocsp-errored, ocsp-renewed. Certberus volby: pre-issue, post-issue, post-reload,
-    # on-failure (cb_run_hooks). Vytvarime obe sady, at je to hned pripravene.
+    # Hook event directories. mod_md emits: renewing, renewed, installed, errored,
+    # ocsp-errored, ocsp-renewed. Certberus choices: pre-issue, post-issue, post-reload,
+    # on-failure (cb_run_hooks). We create both sets so they are ready immediately.
     local ev
     for ev in pre-issue post-issue post-reload post-renew renewing renewed installed errored \
               ocsp-renewed ocsp-errored on-failure deploy; do
         d="$CB_HOOKS_DIR/${ev}.d"
         [[ -d "$d" ]] || mkdir -p "$d" 2>/dev/null
     done
-    # README v hooks adresari (pri prvni instalaci)
+    # README in hooks directory (on first install)
     if [[ ! -f "$CB_HOOKS_DIR/README" ]]; then
         cat > "$CB_HOOKS_DIR/README" 2>/dev/null <<'EOF'
 certberus hooks
 ===============
-Spustitelne skripty (chmod +x) v <event>.d/ se zavolaji pri dane udalosti
-(podobne run-parts). Soubory s priponou .example, .bak, .disabled se ignoruji.
+Executable scripts (chmod +x) in <event>.d/ are called on the given event
+(similar to run-parts). Files with .example, .bak, .disabled extensions are ignored.
 
-Promenne v prostredi hook skriptu:
-  CA_EVENT             nazev udalosti (renewed, installed, errored, ...)
-  CA_PRIMARY_DOMAIN    primarni domena
-  CA_DOMAIN_LIST       cely seznam domen (oddelovac mezera)
+Environment variables in hook scripts:
+  CA_EVENT             event name (renewed, installed, errored, ...)
+  CA_PRIMARY_DOMAIN    primary domain
+  CA_DOMAIN_LIST       full list of domains (space-separated)
   CA_WEBSERVER         apache | nginx | tomcat
   CA_SOURCE            mod_md | certbot | certberus
 
-Per-hook timeout je CB_HOOK_TIMEOUT (default 60s).
+Per-hook timeout is CB_HOOK_TIMEOUT (default 60s).
 
-Priklad: po obnoveni reloadnout HAProxy
+Example: reload HAProxy after renewal
   cat > post-reload.d/30-reload-haproxy.sh <<'SH'
   #!/bin/bash
   systemctl reload haproxy

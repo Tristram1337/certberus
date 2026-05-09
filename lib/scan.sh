@@ -343,16 +343,16 @@ cb_scan() {
             --no-listen) do_listen=0 ;;
             -h|--help)
                 cat <<EOF
-certberus scan - inventura X.509 na stroji
+certberus scan - X.509 inventory on the machine
 
-Volby:
-  --format table|json|tsv     vystupni format (default: table)
-  --no-fs       preskoc skenovani souboru
-  --no-config   preskoc parsing webserver konfiguraci
-  --no-listen   preskoc TLS listener probe
+Options:
+  --format table|json|tsv     output format (default: table)
+  --no-fs       skip filesystem file scanning
+  --no-config   skip webserver config parsing
+  --no-listen   skip TLS listener probe
 
-Promenne:
-  CB_SCAN_PATHS=path1:path2  override default cest pro find (PATH-style)
+Variables:
+  CB_SCAN_PATHS=path1:path2  override default paths for find (PATH-style)
 EOF
                 return 0 ;;
             *) cb_warn "scan: unknown flag '$1'"; return 2 ;;
@@ -362,8 +362,13 @@ EOF
 
     case "$fmt" in
         table|json|tsv) ;;
-        *) cb_warn "neplatny format: $fmt"; return 2 ;;
+        *) cb_warn "invalid format: $fmt"; return 2 ;;
     esac
+
+    if ! command -v openssl >/dev/null 2>&1; then
+        cb_error "openssl is not in PATH - scan requires openssl for certificate parsing"
+        return 1
+    fi
 
     [[ "$fmt" == "table" ]] && cb_log "== Certberus scan (host=$(hostname 2>/dev/null || echo ?)) =="
 
