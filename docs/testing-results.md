@@ -62,15 +62,15 @@ Verze: 0.1.17
 
 ### Modules
 
-| Modul | OS | Status | Poznamka |
-|-------|----|--------|----------|
-| certbot-only (standalone) | Vsechny (12 serveru) | PASS | LE staging certy vydany na vsech |
-| certbot-only (webroot) | Ubuntu 22.04 | PASS (drive) | |
-| certbot-only (port 80 obsazeny, bez webroot) | Ubuntu 22.04 | PASS (spravne odmitne) | |
-| nginx-certbot | Debian 12, Debian 13, Ubuntu 22.04, Ubuntu 25.10 | PASS | nginx auto-install, cert, reload |
-| apache-md | Debian 13, Ubuntu 24.04 | PASS | mod_md async polling, cert v domains/ |
-| tomcat-certbot | Debian 13, Ubuntu 24.04 | **PASS** | **PRVNI REAL HW TEST** — server.xml, HTTPS :443 |
-| apache-md-eab | — | NETESTOVANO | Vyzaduje HARICA + Apache |
+| Module | OS | Status | Note |
+|--------|----|--------|------|
+| certbot-only (standalone) | All (12 servers) | PASS | LE staging certs issued on all |
+| certbot-only (webroot) | Ubuntu 22.04 | PASS (earlier) | |
+| certbot-only (port 80 occupied, no webroot) | Ubuntu 22.04 | PASS (correctly rejects) | |
+| nginx-certbot | Debian 12, Debian 13, Ubuntu 22.04, Ubuntu 25.10 | PASS | nginx auto-install, cert, reload. Refactored: auto-detect nginx root, /var/www/acme removed. |
+| apache-md | Debian 13, Ubuntu 24.04 | PASS | mod_md async polling, cert in domains/ |
+| tomcat-certbot | Debian 13, Ubuntu 24.04 | **PASS** | **FIRST REAL HW TEST** — server.xml, HTTPS :443 |
+| apache-md-eab | — | NOT TESTED | Requires HARICA + Apache |
 
 ### HARICA / CESNET TCS (EAB)
 
@@ -253,7 +253,7 @@ Verze: 0.1.17
 | — | 1GB RAM servery (Rocky 9, Alma 9, CentOS 9) OOM pri `dnf install certbot` | Neni bug — nedostatek RAM. Reseno pridanim swapu. |
 | — | HARICA EAB credentials jsou single-use pro registraci uctu | Neni bug certberus — HARICA ACME server chrani EAB pred znovupouzitim. |
 | — | Config.env z HARICA testu (CB_CA=harica, CB_ACME_URL) pretrvava a ovlivni dalsi beh s --staging | Potencialni UX problem. CLI --staging by mel ignorovat CB_ACME_URL z config.env kdyz neni --ca harica. |
-| **16** | **Ubuntu 25.10: /var/www ma permissions 700** — nginx worker (www-data) nemuze cist webroot pro ACME challenge. `nginx-certbot` modul vytvori `/var/www/acme` ale neoveruje traversovatelnost rodicovskeho adresare. | **OPRAVENO** — `nginx-certbot.sh` stage_prepare nyni `chmod o+rx` na rodice webrootu. |
+| **16** | **Ubuntu 25.10: /var/www ma permissions 700** — nginx worker (www-data) nemuze cist webroot pro ACME challenge. `nginx-certbot` modul vytvori `/var/www/acme` ale neoveruje traversovatelnost rodicovskeho adresare. | **OPRAVENO** — refaktorovano: modul nyni auto-detekuje nginx document root z `nginx -T`, pouziva standardni `/var/www/html` (fallback). `/var/www/acme` + snippet pristup odstranen. Migracni kod cisti pozustatky z <=0.1.16. E2E overeno: Debian 12, Ubuntu 25.10. |
 
 ## Zname limitace
 
@@ -271,7 +271,7 @@ Verze: 0.1.17
 | Testovanych platforem | 12 (+ 5 z drivejska = 17 celkem) |
 | Novych platforem | Fedora 42, Fedora 43, Rocky 8, Alma 8/9, Debian 12 |
 | Unikatnich OS verzi | 10 |
-| Staging certu vydano | 18 |
+| Staging certu vydano | 21 |
 | Produkcnich certu vydano | 5 (Rocky 8, Fedora 42, Debian 12, Debian 13, Ubuntu 25.10) |
 | Ext. SSL overeni (Verify: 0 ok) | 5/5 produkcnich, 4/4 staging |
 | Tomcat modulu otestovano | 2 (Debian 13, Ubuntu 24.04) — PRVNI REAL HW TEST |
@@ -280,4 +280,4 @@ Verze: 0.1.17
 | Firewall backendu otestovano | 4 (iptables legacy, iptables nf_tables, firewalld, nftables) |
 | Unit testu | 16 pass, 0 fail |
 | Chaos testu | 7 pass |
-| Novych bugu nalezeno | 1 (#16: Ubuntu 25.10 /var/www 700 — opraveno) |
+| Novych bugu nalezeno | 1 (#16: Ubuntu 25.10 /var/www 700 — opraveno refaktoringem) |
