@@ -28,7 +28,7 @@ source "$_LIB_DIR/preflight.sh"
 cb_load_config
 
 : "${CB_NGINX_CONF_DIR:=/etc/nginx}"
-: "${CB_NGINX_WEBROOT:=/var/www/acme}"
+: "${CB_NGINX_WEBROOT:=}"
 : "${CB_NGINX_SITES_AVAILABLE:=$CB_NGINX_CONF_DIR/sites-available}"
 : "${CB_NGINX_SITES_ENABLED:=$CB_NGINX_CONF_DIR/sites-enabled}"
 : "${CB_CERTBOT_HOOK_DIR:=/etc/letsencrypt/renewal-hooks/deploy}"
@@ -84,8 +84,8 @@ Usage: $0 [OPTIONS]
       --domain D       Domain (repeatable)
       --email E        Contact email
       --ca NAME        letsencrypt | harica | zerossl
-      --acme-url URL   Vlastni ACME URL
-      --webroot DIR    ACME webroot (default: /var/www/acme)
+      --acme-url URL   Custom ACME URL
+      --webroot DIR    ACME webroot (default: autodetect from nginx root)
       --eab-kid KID
       --eab-hmac HMAC
       --no-firewall    Never automatically modify firewall
@@ -128,12 +128,14 @@ stage_prepare() {
     cb_require_root
     cb_require_os debian ubuntu
     cb_hook_context nginx ""
-    mkdir -p "$CB_LOG_DIR" "$CB_NGINX_WEBROOT" "$CB_CERTBOT_HOOK_DIR" "$CB_STATE_DIR" 2>/dev/null
-    # Ubuntu 25.10+ ma /var/www s 700 — nginx worker nemuze traverzovat
-    local _wr_parent
-    _wr_parent="$(dirname "$CB_NGINX_WEBROOT")"
-    [[ -d "$_wr_parent" ]] && chmod o+rx "$_wr_parent" 2>/dev/null || true
-    chmod 0755 "$CB_NGINX_WEBROOT" 2>/dev/null || true
+    mkdir -p "$CB_LOG_DIR" "$CB_CERTBOT_HOOK_DIR" "$CB_STATE_DIR" 2>/dev/null
+    # Detect nginx document root (if --webroot was not specified explicitly)
+    if [[ -z "$CB_NGINX_WEBROOT" ]]; then
+        CB_NGINX_WEBROOT=$(nginx -T 2>/dev/null \
+            | awk '/^[[:space:]]*server[[:space:]]*\{/{in_s=1} in_s && /listen.*80/{has80=1} in_s && /root[[:space:]]/{r=$2; gsub(/;/,"",r)} in_s && /\}/{if(has80 && r) {print r; exit}; in_s=0; has80=0; r=""}')
+        [[ -z "$CB_NGINX_WEBROOT" ]] && CB_NGINX_WEBROOT="/var/www/html"
+        cb_debug "Nginx document root: $CB_NGINX_WEBROOT"
+    fi
     cb_run_hooks pre-install
 }
 
@@ -341,74 +343,22 @@ stage_firewall() {
 
 stage_nginx_acme_location() {
     cb_sep
-    # Zajistime, ze nginx ma /.well-known/acme-challenge location ukazujici na WEBROOT
-    # Strategie: pridame snippet ktery se include-uje do vsech :80 server bloku.
-    local snippet="$CB_NGINX_CONF_DIR/snippets/certberus-acme.conf"
-    mkdir -p "$(dirname "$snippet")"
-    if [[ "$CB_DRY_RUN" == "0" ]]; then
-        cat > "$snippet" <<EOF
-# Certberus ACME HTTP-01 challenge location (generovano, neupravovat).
-location /.well-known/acme-challenge/ {
-    root $CB_NGINX_WEBROOT;
-    default_type "text/plain";
-    try_files \$uri =404;
-}
-EOF
+    # Migration: remove remnants of old snippet approach (<=0.1.16)
+    local snippet="/etc/nginx/snippets/certberus-acme.conf"
+    if [[ -f "$snippet" ]]; then
+        cb_log "Removing obsolete ACME snippet: $snippet"
+        [[ "$CB_DRY_RUN" == "0" ]] && rm -f "$snippet"
     fi
-    cb_ok "ACME challenge snippet: $snippet"
-    cb_log "Pridejte include $snippet; do server { listen 80; ... } bloku."
-    # Auto-inject: if default site exists, add include
-    local default_site="$CB_NGINX_SITES_ENABLED/default"
-    if [[ -f "$default_site" ]] && ! grep -q "certberus-acme.conf" "$default_site"; then
-        if cb_ask_yn "Pridat include snippetu do $default_site?" "Y/n"; then
-            if [[ "$CB_DRY_RUN" == "0" ]]; then
-                # NOTE: backup must NOT end up in /etc/nginx/sites-enabled/ -
-                # nginx tam ma `include sites-enabled/*;` a duplicitni server{}
-                # blok by zpusobil "duplicate default server" chybu (BUG #19).
-                local backup_dir="${CB_BACKUP_DIR:-/var/backups/certberus}/nginx-vhost-backups"
-                mkdir -p "$backup_dir"
-                cp "$default_site" "$backup_dir/$(basename "$default_site").bak_$(date +%s)"
-                # NOTE: plain `sed /listen 80/a` also matches comments
-                # `#\tlisten 80;` v priklade na konci Debian default souboru,
-                # cimz include skonci MIMO jakykoliv server{} blok a nginx -t
-                # selze s "location directive is not allowed here".
-                # Proto: match jen NON-comment radek s `listen 80` uvnitr server{}.
-                # Pouzijeme awk se state-machine pro spolehlive vlozeni pred
-                # uzaviraci } prvniho server bloku, ktery obsahuje listen 80.
-                awk -v snip="$snippet" '
-                    BEGIN { inserted=0; depth=0; in_server=0; has_listen=0; buf="" }
-                    {
-                        if (inserted) { print; next }
-                        line=$0
-                        # Track server { start
-                        if (line ~ /^[[:space:]]*server[[:space:]]*\{/ && depth==0) {
-                            in_server=1; has_listen=0; buf=""
-                        }
-                        # Count braces to detect server block end
-                        n=gsub(/\{/, "{", line); depth += n
-                        n=gsub(/\}/, "}", line); depth -= n
-                        # Real (non-comment) listen 80 line?
-                        if (in_server && line ~ /^[[:space:]]*listen[[:space:]]+(80|\[::\]:80)([[:space:]]|;)/) {
-                            has_listen=1
-                        }
-                        # If we are about to close server block that has listen 80, insert snippet
-                        if (in_server && depth==0 && has_listen && !inserted) {
-                            # The closing } is in this line - insert before it
-                            print "    include " snip ";"
-                            inserted=1
-                        }
-                        print $0
-                        if (depth==0) in_server=0
-                    }
-                ' "$default_site" > "$default_site.new" && mv "$default_site.new" "$default_site"
-                if grep -q "certberus-acme.conf" "$default_site"; then
-                    cb_ok "Include pridan do $default_site"
-                else
-                    cb_warn "Include se nepodarilo vlozit (neznama struktura $default_site)"
-                fi
-            fi
+    # Remove include lines from nginx config
+    local f
+    for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+        [[ -f "$f" ]] || continue
+        if grep -q 'certberus-acme\.conf' "$f" 2>/dev/null; then
+            cb_log "Removing obsolete include from $f"
+            [[ "$CB_DRY_RUN" == "0" ]] && sed -i '/certberus-acme\.conf/d' "$f"
         fi
-    fi
+    done
+    cb_ok "ACME webroot: $CB_NGINX_WEBROOT (nginx document root)"
 }
 
 stage_install_deploy_hook() {
@@ -775,11 +725,11 @@ main() {
     run_stage email
     run_stage firewall
     run_stage nginx_acme_location
-    _CB_MODIFIED_CONFIG=1   # od teto chvile uz jsme modifikovali /etc/nginx
     run_stage install_deploy_hook
     run_stage ensure_cert_placeholders
     run_stage test_reload   # first nginx config test (before issue)
     run_stage issue_cert
+    _CB_MODIFIED_CONFIG=1
     run_stage inject_nginx_ssl
     run_stage enable_timer
     run_stage test_reload
