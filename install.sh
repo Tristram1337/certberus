@@ -75,7 +75,7 @@ done
 
 # Webservers
 echo "Installing webservers/"
-for f in apache-md.sh apache-md-eab.sh nginx-certbot.sh tomcat-certbot.sh; do
+for f in apache-md.sh apache-md-eab.sh nginx-certbot.sh tomcat-certbot.sh certbot-only.sh jetty-certbot.sh caddy.sh; do
     install -m 0755 "$SRC/webservers/$f" "$PREFIX/lib/certberus/webservers/$f"
 done
 

@@ -29,9 +29,21 @@ cb_load_config
 
 : "${CB_NGINX_CONF_DIR:=/etc/nginx}"
 : "${CB_NGINX_WEBROOT:=}"
-: "${CB_NGINX_SITES_AVAILABLE:=$CB_NGINX_CONF_DIR/sites-available}"
-: "${CB_NGINX_SITES_ENABLED:=$CB_NGINX_CONF_DIR/sites-enabled}"
 : "${CB_CERTBOT_HOOK_DIR:=/etc/letsencrypt/renewal-hooks/deploy}"
+
+# OS-dispatch: Debian uses sites-available/sites-enabled, RHEL uses conf.d
+case "$CB_OS_ID" in
+    debian|ubuntu)
+        _NGINX_HAS_SITES=1
+        : "${CB_NGINX_SITES_AVAILABLE:=$CB_NGINX_CONF_DIR/sites-available}"
+        : "${CB_NGINX_SITES_ENABLED:=$CB_NGINX_CONF_DIR/sites-enabled}"
+        ;;
+    *)
+        _NGINX_HAS_SITES=0
+        : "${CB_NGINX_SITES_AVAILABLE:=$CB_NGINX_CONF_DIR/conf.d}"
+        : "${CB_NGINX_SITES_ENABLED:=$CB_NGINX_CONF_DIR/conf.d}"
+        ;;
+esac
 
 CB_CA="${CB_CA:-letsencrypt}"
 CB_DOMAINS="${CB_DOMAINS:-}"
@@ -126,7 +138,6 @@ parse_args() {
 stage_prepare() {
     cb_banner "Certberus / nginx / certbot"
     cb_require_root
-    cb_require_os debian ubuntu
     cb_hook_context nginx ""
     mkdir -p "$CB_LOG_DIR" "$CB_CERTBOT_HOOK_DIR" "$CB_STATE_DIR" 2>/dev/null
     # Detect nginx document root (if --webroot was not specified explicitly)
@@ -134,10 +145,11 @@ stage_prepare() {
         CB_NGINX_WEBROOT=$(nginx -T 2>/dev/null \
             | awk '
             /^[[:space:]]*#/ { next }
-            /\{/ { depth++; if (depth==1 && /server[[:space:]]*\{/) { in_s=1; has80=0; r="" } }
-            in_s && depth==1 && /listen[[:space:]]/ && /80/ { has80=1 }
-            in_s && depth==1 && /^[[:space:]]*root[[:space:]]/ { r=$2; gsub(/;/,"",r) }
-            /\}/ { if (in_s && depth==1 && has80 && r) { print r; exit }; if (depth==1) { in_s=0 }; depth-- }
+            /\{/ { depth++ }
+            /server[[:space:]]*\{/ { in_s=1; sd=depth; has80=0; r="" }
+            in_s && depth==sd && /listen[[:space:]]/ && /80/ { has80=1 }
+            in_s && depth==sd && /^[[:space:]]*root[[:space:]]/ { r=$2; gsub(/;/,"",r) }
+            /\}/ { if (in_s && depth==sd && has80 && r) { print r; exit }; if (depth==sd) in_s=0; depth-- }
             ')
         [[ -z "$CB_NGINX_WEBROOT" ]] && CB_NGINX_WEBROOT="/var/www/html"
         cb_debug "Nginx document root: $CB_NGINX_WEBROOT"
@@ -357,9 +369,9 @@ stage_nginx_acme_location() {
     fi
     # Remove include lines from nginx config
     local f
-    for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+    for f in "$CB_NGINX_SITES_ENABLED"/* "$CB_NGINX_CONF_DIR"/conf.d/*.conf; do
         [[ -f "$f" ]] || continue
-        if grep -q 'certberus-acme\.conf' "$f" 2>/dev/null; then
+        if grep 'certberus-acme\.conf' "$f" 2>/dev/null; then >/dev/null
             cb_log "Removing obsolete include from $f"
             [[ "$CB_DRY_RUN" == "0" ]] && sed -i '/certberus-acme\.conf/d' "$f"
         fi
@@ -485,7 +497,7 @@ stage_issue_cert() {
 
     # Detect availability of certbot-nginx plugin (for new domains)
     local _cb_has_nginx_plugin=0
-    if certbot plugins 2>/dev/null | grep -q 'nginx'; then
+    if certbot plugins 2>/dev/null | grep 'nginx'; then >/dev/null
         _cb_has_nginx_plugin=1
     fi
 
@@ -622,9 +634,9 @@ stage_inject_nginx_ssl() {
 
 stage_enable_timer() {
     # certbot.timer (systemd)
-    if systemctl list-unit-files 2>/dev/null | grep -q '^certbot\.timer'; then
+    if systemctl list-unit-files 2>/dev/null | grep '^certbot\.timer'; then >/dev/null
         systemctl enable --now certbot.timer >/dev/null 2>&1 && cb_ok "certbot.timer enabled"
-    elif systemctl list-unit-files 2>/dev/null | grep -q '^snap.certbot.renew.timer'; then
+    elif systemctl list-unit-files 2>/dev/null | grep '^snap.certbot.renew.timer'; then >/dev/null
         systemctl enable --now snap.certbot.renew.timer >/dev/null 2>&1 && cb_ok "snap certbot.renew.timer enabled"
     fi
 }
@@ -691,6 +703,7 @@ stage_test_reload() {
     fi
     cb_ok "nginx -t OK"
     if [[ "$CB_DRY_RUN" == "0" ]]; then
+        cb_svc_is_active nginx || cb_svc_start nginx
         if ! cb_svc_reload nginx; then
             cb_error "nginx reload failed"
             if [[ "${CB_AUTO_ROLLBACK:-0}" == "1" ]]; then
