@@ -129,6 +129,10 @@ stage_prepare() {
     cb_require_os debian ubuntu
     cb_hook_context nginx ""
     mkdir -p "$CB_LOG_DIR" "$CB_NGINX_WEBROOT" "$CB_CERTBOT_HOOK_DIR" "$CB_STATE_DIR" 2>/dev/null
+    # Ubuntu 25.10+ ma /var/www s 700 — nginx worker nemuze traverzovat
+    local _wr_parent
+    _wr_parent="$(dirname "$CB_NGINX_WEBROOT")"
+    [[ -d "$_wr_parent" ]] && chmod o+rx "$_wr_parent" 2>/dev/null || true
     chmod 0755 "$CB_NGINX_WEBROOT" 2>/dev/null || true
     cb_run_hooks pre-install
 }
