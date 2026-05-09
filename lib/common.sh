@@ -490,10 +490,13 @@ cb_certbot_issue() {
     if (( rc != 0 )); then
         return "$rc"
     fi
+    # Dry-run does not create files - exit 0 from certbot is sufficient.
+    if [[ "${CB_DRY_RUN:-0}" == "1" ]] || printf '%s\n' "$out" | grep -qi "dry run"; then
+        return 0
+    fi
     # Exit 0 does not yet mean success (certbot 4.x bug). Verify cert file.
     if [[ ! -f "$live" ]]; then
         cb_error "certbot returned 0, but $live does not exist"
-        # Detekce zname chyby
         if printf '%s' "$out" | grep -qE "Some challenges have failed|Unable to register|Domain .* failed"; then
             return 2
         fi
