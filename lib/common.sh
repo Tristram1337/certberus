@@ -280,13 +280,21 @@ cb_auto_rollback() {
 
 # -------- Load config files --------
 cb_load_config() {
-    local f
+    local f line key val
     for f in "$CB_ADVANCED_FILE" "$CB_CONFIG_FILE"; do
-        if [[ -r "$f" ]]; then
-            # shellcheck disable=SC1090
-            set -a; source "$f"; set +a
-            cb_debug "Nacteno: $f"
-        fi
+        [[ -r "$f" ]] || continue
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${line// /}" ]] && continue
+            if [[ "$line" =~ ^[[:space:]]*(CB_[A-Za-z0-9_]+)=(.*) ]]; then
+                key="${BASH_REMATCH[1]}"
+                val="${BASH_REMATCH[2]}"
+                val="${val#\"}" ; val="${val%\"}"
+                val="${val#\'}" ; val="${val%\'}"
+                export "$key=$val"
+            fi
+        done < "$f"
+        cb_debug "Loaded: $f"
     done
     cb_sanitize_acme_url
 }

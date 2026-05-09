@@ -10,7 +10,7 @@
 #
 set -uo pipefail
 
-CB_VERSION="0.1.15"
+CB_VERSION="0.1.16"
 
 # Locate libraries - dev mode (repo) or installed mode
 _SELF_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -1052,13 +1052,13 @@ cmd_hooks() {
             for ev in "${CB_KNOWN_EVENTS[@]}"; do
                 local d="$CB_HOOKS_DIR/${ev}.d"
                 [[ -d "$d" ]] || continue
-                local hooks; hooks=$(find "$d" -maxdepth 1 -type f 2>/dev/null | sort)
+                local hooks; hooks=$(find "$d" -maxdepth 1 -type f \
+                    ! -name '*.disabled' ! -name '*.bak' ! -name '*~' \
+                    -executable 2>/dev/null | sort)
                 [[ -z "$hooks" ]] && continue
                 echo "== $ev =="
                 echo "$hooks" | while read -r h; do
-                    local exec_flag=" "
-                    [[ -x "$h" ]] && exec_flag="x"
-                    echo "  [$exec_flag] $(basename "$h")"
+                    echo "  [x] $(basename "$h")"
                 done
             done
             ;;

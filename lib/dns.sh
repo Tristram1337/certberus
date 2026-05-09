@@ -33,14 +33,16 @@ cb_local_ipv6_list() {
 cb_server_ipv4() {
     [[ -n "${CB_SERVER_IP4:-}" ]] && { printf '%s' "$CB_SERVER_IP4"; return 0; }
     local ip=""
-    for svc in \
-        "https://api.ipify.org" \
-        "https://ifconfig.me" \
-        "https://checkip.amazonaws.com"; do
-        ip=$(curl -m 4 -4 -s "$svc" 2>/dev/null | tr -d '[:space:]')
-        [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && break
-        ip=""
-    done
+    if command -v curl >/dev/null 2>&1; then
+        for svc in \
+            "https://api.ipify.org" \
+            "https://ifconfig.me" \
+            "https://checkip.amazonaws.com"; do
+            ip=$(curl -m 4 -4 -s "$svc" 2>/dev/null | tr -d '[:space:]')
+            [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && break
+            ip=""
+        done
+    fi
     if [[ -z "$ip" ]]; then
         # Air-gap fallback: take the first global IPv4 from local interfaces
         ip=$(cb_local_ipv4_list | awk '{print $1}')
@@ -51,9 +53,11 @@ cb_server_ipv4() {
 
 cb_server_ipv6() {
     [[ -n "${CB_SERVER_IP6:-}" ]] && { printf '%s' "$CB_SERVER_IP6"; return 0; }
-    local ip
-    ip=$(curl -m 4 -6 -s "https://api64.ipify.org" 2>/dev/null | tr -d '[:space:]')
-    [[ "$ip" == *:* ]] || ip=""
+    local ip=""
+    if command -v curl >/dev/null 2>&1; then
+        ip=$(curl -m 4 -6 -s "https://api64.ipify.org" 2>/dev/null | tr -d '[:space:]')
+        [[ "$ip" == *:* ]] || ip=""
+    fi
     if [[ -z "$ip" ]]; then
         ip=$(cb_local_ipv6_list | awk '{print $1}')
     fi

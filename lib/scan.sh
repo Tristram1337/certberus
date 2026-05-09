@@ -365,6 +365,11 @@ EOF
         *) cb_warn "invalid format: $fmt"; return 2 ;;
     esac
 
+    if ! command -v openssl >/dev/null 2>&1; then
+        cb_error "openssl is not in PATH - scan requires openssl for certificate parsing"
+        return 1
+    fi
+
     [[ "$fmt" == "table" ]] && cb_log "== Certberus scan (host=$(hostname 2>/dev/null || echo ?)) =="
 
     local first_section=1
