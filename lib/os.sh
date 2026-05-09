@@ -72,6 +72,13 @@ cb_pkg_install() {
         cb_log "[DRY-RUN] $CB_PKG_INSTALL $*"
         return 0
     fi
+    # RHEL/CentOS/Alma/Rocky: certbot is in EPEL
+    if [[ "$CB_PKG_MGR" == "dnf" || "$CB_PKG_MGR" == "yum" ]]; then
+        if ! rpm -q epel-release >/dev/null 2>&1; then
+            cb_log "EPEL is not enabled - installing epel-release..."
+            eval "$CB_PKG_INSTALL epel-release" >/dev/null 2>&1 || true
+        fi
+    fi
     eval "$CB_PKG_UPDATE" >/dev/null 2>&1 || true
     eval "$CB_PKG_INSTALL $*"
 }
