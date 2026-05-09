@@ -680,7 +680,8 @@ cmd_auto() {
         # trim wrapping whitespace (CLI_DOMAINS accumulates leading space via "$x $y")
         _persist_domains="${_persist_domains#"${_persist_domains%%[![:space:]]*}"}"
         _persist_domains="${_persist_domains%"${_persist_domains##*[![:space:]]}"}"
-        cb_persist_config_skeleton "$email" "$_persist_domains" "$ca" || true
+        cb_persist_config_skeleton "$email" "$_persist_domains" "$ca" \
+            "${CLI_EAB_KID:-}" "${CLI_EAB_HMAC:-}" "${CLI_ACME_URL:-}" || true
     fi
 
     # Port-80 pre-flight: if admin didn't use --firewall, verify that
