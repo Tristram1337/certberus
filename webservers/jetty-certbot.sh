@@ -484,8 +484,18 @@ stage_inject_jetty_ssl() {
     local ssl_active=0
     for ini in "$_JETTY_BASE/start.ini" "$_JETTY_BASE/start.d/ssl.ini"; do
         [[ -f "$ini" ]] || continue
-        if grep -E '^\s*--module=ssl' "$ini" 2>/dev/null; then >/dev/null
+        if grep -E '^\s*--module=ssl' "$ini" >/dev/null 2>&1; then
             ssl_active=1
+            break
+        fi
+    done
+
+    # Check whether the HTTPS module is already active
+    local https_active=0
+    for ini in "$_JETTY_BASE/start.ini" "$_JETTY_BASE/start.d/https.ini"; do
+        [[ -f "$ini" ]] || continue
+        if grep -E '^\s*--module=https' "$ini" >/dev/null 2>&1; then
+            https_active=1
             break
         fi
     done
@@ -497,6 +507,19 @@ stage_inject_jetty_ssl() {
         if [[ -n "$_JETTY_HOME" && -f "$_JETTY_HOME/start.jar" ]]; then
             cb_log "Activating SSL module via start.jar..."
             (cd "$_JETTY_BASE" && java -jar "$_JETTY_HOME/start.jar" --add-module=ssl 2>>"$CB_LOG_FILE") || true
+        fi
+    fi
+
+    # The bare ssl module only enables the TLS connector framework.
+    # Without https (HTTP/1.1 over TLS) the connector starts with no protocol
+    # and Jetty fails: "No default protocol for ServerConnector ... 0.0.0.0:8443".
+    if (( https_active )); then
+        cb_ok "Jetty HTTPS module is active"
+    else
+        cb_log "Jetty HTTPS module is not active"
+        if [[ -n "$_JETTY_HOME" && -f "$_JETTY_HOME/start.jar" ]]; then
+            cb_log "Activating HTTPS module via start.jar..."
+            (cd "$_JETTY_BASE" && java -jar "$_JETTY_HOME/start.jar" --add-module=https 2>>"$CB_LOG_FILE") || true
         fi
     fi
 

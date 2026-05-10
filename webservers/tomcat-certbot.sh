@@ -218,8 +218,8 @@ stage_detect_tomcat() {
     cb_ok "User: $TOMCAT_USER"
 
     # 5. Warning about APR
-    if grep -E 'AprLifecycleListener' "$TOMCAT_SERVER_XML" 2>/dev/null && \ >/dev/null
-       grep -E 'protocol=".*Apr' "$TOMCAT_SERVER_XML" 2>/dev/null; then >/dev/null
+    if grep -E 'AprLifecycleListener' "$TOMCAT_SERVER_XML" >/dev/null 2>&1 && \
+       grep -E 'protocol=".*Apr' "$TOMCAT_SERVER_XML" >/dev/null 2>&1; then
         cb_warn "APR/OpenSSL connector detected - certberus only configures NIO/NIO2."
         cb_warn "You must manually adjust the APR connector (different attributes)."
     fi
@@ -360,10 +360,25 @@ for c in root.iter('Connector'):
                 TOMCAT_ACME_WEBROOT="$CB_TOMCAT_ACME_WEBROOT"
             else
                 local wr=""
-                for d in /usr/share/tomcat/webapps/ROOT /var/lib/tomcat/webapps/ROOT; do
-                    [[ -d "$(dirname "$d")" ]] && { wr="$d"; break; }
-                done
-                [[ -z "$wr" ]] && wr="/usr/share/tomcat/webapps/ROOT"
+                # Prefer CATALINA_BASE from systemd unit (Debian/Ubuntu pattern: /var/lib/tomcatN)
+                local catbase
+                catbase=$(systemctl show "$TOMCAT_SERVICE" -p Environment 2>/dev/null \
+                    | tr ' ' '\n' | awk -F= '/^CATALINA_BASE=/{print $2; exit}')
+                if [[ -n "$catbase" && -d "$catbase/webapps" ]]; then
+                    wr="$catbase/webapps/ROOT"
+                fi
+                # Fallback: versioned and unversioned standard locations
+                if [[ -z "$wr" ]]; then
+                    for d in \
+                        "/var/lib/${TOMCAT_SERVICE}/webapps/ROOT" \
+                        "/var/lib/tomcat${TOMCAT_VERSION}/webapps/ROOT" \
+                        "/usr/share/tomcat${TOMCAT_VERSION}/webapps/ROOT" \
+                        "/var/lib/tomcat/webapps/ROOT" \
+                        "/usr/share/tomcat/webapps/ROOT"; do
+                        [[ -d "$(dirname "$d")" ]] && { wr="$d"; break; }
+                    done
+                fi
+                [[ -z "$wr" ]] && wr="/var/lib/${TOMCAT_SERVICE}/webapps/ROOT"
                 TOMCAT_ACME_WEBROOT="$wr"
             fi
             mkdir -p "$TOMCAT_ACME_WEBROOT/.well-known/acme-challenge"
