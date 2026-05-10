@@ -46,15 +46,26 @@ else
 fi
 
 if command -v detect-secrets >/dev/null && [[ -f .secrets.baseline ]]; then
-    diffout=$(detect-secrets scan --baseline .secrets.baseline \
-              --exclude-files '\.git/' --exclude-files '\.gitleaks\.toml$' \
-              2>&1 || true)
-    if git diff --quiet .secrets.baseline 2>/dev/null; then
+    cp .secrets.baseline /tmp/baseline.before.$$
+    detect-secrets scan --baseline .secrets.baseline \
+        --exclude-files '\.git/' \
+        --exclude-files '\.gitleaks\.toml$' \
+        --exclude-files '\.secrets\.baseline$' \
+        2>/dev/null || true
+    # Compare structural finding sets, not file bytes (timestamp / version
+    # fields churn on every run).
+    before_set=$(jq -S '.results | with_entries(.value |= map(.hashed_secret) | .value |= sort)' /tmp/baseline.before.$$)
+    after_set=$(jq -S '.results | with_entries(.value |= map(.hashed_secret) | .value |= sort)' .secrets.baseline)
+    if [[ "$before_set" == "$after_set" ]]; then
         ok "detect-secrets (no new vs baseline)"
     else
         err "detect-secrets - new findings vs .secrets.baseline:"
-        git --no-pager diff .secrets.baseline | head -30
+        diff <(echo "$before_set") <(echo "$after_set") | head -30
     fi
+    # Restore the baseline so timestamp churn does not show as a working-tree
+    # modification after the scan.
+    cp /tmp/baseline.before.$$ .secrets.baseline
+    rm -f /tmp/baseline.before.$$
 else
     echo "[skip] detect-secrets or .secrets.baseline missing"
 fi
