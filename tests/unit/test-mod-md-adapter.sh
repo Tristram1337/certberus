@@ -6,7 +6,7 @@
 #   3. reject invalid DOMAIN (shell injection defense)
 #   4. on renewed/installed automatically call 'apache2ctl graceful'
 #      Without this Apache does not serve the cert after the first mod_md
-#      issuance until a manual reload (real-world bug from example.com).
+#      issuance until a manual reload (real-world bug).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../lib/assert.sh"

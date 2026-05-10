@@ -885,9 +885,9 @@ stage_test_reload() {
 #      emits 'renewed' + 'installed' events. The adapter reacts to them.
 # Without this second graceful the cert would sit in staging indefinitely.
 #
-# The reference implementation (reference-implementation) solves this
-# by having the sysadmin manually run 'systemctl reload apache2' after the script.
-# We do this automatically.
+# Other reference implementations leave this to a manual
+# 'systemctl reload apache2' that the sysadmin runs after the script. We do
+# it automatically.
 #
 # We poll for the staging cert so we can do a graceful AS SOON AS ACME arrives
 # (typically 5-30s). Default timeout 120s via CB_POST_ISSUE_TIMEOUT.

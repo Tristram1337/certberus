@@ -28,7 +28,7 @@ bash tests/run-all.sh --keep-going     # continue past first failure
 |---|---|
 | `test-syntax.sh` | `bash -n` on every `*.sh` in the repo |
 | `test-cli-args.sh` | `parse_global`, `cmd_cert_info` arg routing, `--firewall`, dedup |
-| `test-firewall-default.sh` | Firewall is **opt-in** (regression: example.com leak) |
+| `test-firewall-default.sh` | Firewall is **opt-in** (regression: silent override on managed hosts) |
 | `test-mod-md-adapter.sh` | Generated `MDMessageCMD` adapter: whitelist, sanitization, auto-graceful Apache |
 | `test-hooks-runtime.sh` | `cb_run_hooks` + `cb_ensure_runtime_dirs` |
 | `test-bundle.sh` | Single-file bundle build + cwd-independence |

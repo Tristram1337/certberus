@@ -75,18 +75,6 @@ certberus auto --webserver certbot-only \
     -y
 ```
 
-Concrete example (example.com):
-```bash
-certberus auto --webserver certbot-only \
-    --domain example.com \
-    --email admin@example.com \
-    --ca harica \
-    --eab-kid "YOUR_EAB_KID" \
-    --eab-hmac "YOUR_EAB_HMAC_KEY" \
-    --acme-url "https://acme-v02.harica.gr/acme/YOUR-ACCOUNT-UUID/directory" \
-    -y
-```
-
 > **Note**: The domain must have an A record pointing to the server where certberus runs.
 > HARICA validates the HTTP-01 challenge on port 80.
 

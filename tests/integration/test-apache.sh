@@ -1098,7 +1098,7 @@ apache2ctl -t 2>&1 | grep -q "Syntax OK" || { echo "Apache failed"; apache2ctl -
 
 # === CHAOS REGRESSION v3 - session 2026-04 ==================================
 # The cases described below guard against regression of bugs found during chaos testing
-# (example.com live run + docker matrix). Each case has a comment with the bug number.
+# (live host run + docker matrix). Each case has a comment with the bug number.
 
 # --- CASE 56: BUG #13/#9 - placeholder CB_ACME_URL panics, warns only 1x --
 run_case "apache-placeholder-acme-url-dedup" \

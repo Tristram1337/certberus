@@ -1,8 +1,8 @@
 #!/bin/bash
 # tests/unit/test-firewall-default.sh
 # v0.1.5 regression: cb_firewall_acme_auto_open_enabled is default OFF.
-# Real-world: example.com - certberus was silent and inserted iptables ACCEPT
-# rules, overriding the managed firewall (ZCU policy). Firewall must be opt-in.
+# Real-world: certberus was silent and inserted iptables ACCEPT rules, overriding
+# a centrally-managed firewall policy. Firewall mutations must be opt-in.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../lib/assert.sh"
@@ -15,7 +15,7 @@ source "$CB_REPO_ROOT/lib/firewall.sh"
 # Test 1: no env -> false
 unset CB_FIREWALL_AUTO_OPEN _CB_HARICA_FIREWALL_WARNED CB_HARICA_FIREWALL_AUTO_OPEN CB_CA
 if cb_firewall_acme_auto_open_enabled; then
-    t_fail "default: firewall MUST NOT be enabled (regression from example.com)"
+    t_fail "default: firewall MUST NOT be enabled (managed-host regression)"
 else
     t_pass "default OFF (firewall opt-in)"
 fi

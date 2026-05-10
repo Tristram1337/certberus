@@ -2,8 +2,8 @@
 # tests/unit/test-hooks-runtime.sh
 #
 # v0.1.5 area: cb_run_hooks + cb_ensure_runtime_dirs.
-# Real-world bug from example.com: hooks directories existed, but ensure_runtime_dirs
-# did not create them immediately, so the first mod_md event hooks just silently logged.
+# Real-world regression: hooks directories existed but ensure_runtime_dirs did not
+# create them immediately, so the first mod_md event hooks just silently logged.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../lib/assert.sh"
