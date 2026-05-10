@@ -177,7 +177,7 @@ echo "--- T3.7: --ca non-existent CA ---"
 OUT=$(certberus auto --webserver certbot-only --domain x.example.com --email a@a.com --ca totallyFakeCA --staging --dry-run -y 2>&1); rc=$?
 [[ $rc -le 2 ]] && _pass "T3.7 unknown CA does not crash (rc=$rc)" || _fail "T3.7" "rc=$rc"
 
-echo "--- T3.8: --acme-url s javascript ---"
+echo "--- T3.8: --acme-url with javascript ---"
 OUT=$(certberus auto --webserver certbot-only --domain x.example.com --email a@a.com --acme-url 'javascript:alert(1)' --staging --dry-run -y 2>&1); rc=$?
 [[ $rc -ne 0 ]] && _pass "T3.8 javascript ACME URL rejected" || _fail "T3.8" "accepted"
 

@@ -37,7 +37,7 @@ t_stub_log_helpers
 CB_VERBOSE=0
 source "$CB_REPO_ROOT/lib/scan.sh"
 
-# Override default paths na sandbox; CB_SCAN_ROOT pro config refs
+# Override default paths to sandbox; CB_SCAN_ROOT for config refs
 export CB_SCAN_PATHS="$SANDBOX/etc"
 export CB_SCAN_ROOT="$SANDBOX"
 
@@ -89,15 +89,15 @@ cb_scan --bogus </dev/null >/dev/null 2>&1
 rc=$?
 assert_exit_code 2 "$rc" "unknown flag = rc 2"
 
-# ---- Test 6: --help prints usage, rc=0 ---------------------------------
+# ---- Test 6: --help prints usage, rc=0 ------------------------------------
 out_help=$(cb_scan --help 2>&1); rc=$?
 assert_exit_code 0 "$rc" "--help rc 0"
 assert_contains "$out_help" "format" "help mentions --format"
 
 # ---- Test 7: password-protected certificates MUST NOT hang the scan ------
-# Regression: pred fixem v0.1.8 'certberus scan' padal kdyz narazil na
-# .p12 s heslem -- openssl pkcs12 vyvolal interaktivni prompt ktery cekal
-# na /dev/tty a cely scan visel.
+# Regression: before the v0.1.8 fix, 'certberus scan' hung when it hit
+# a .p12 with a password -- openssl pkcs12 spawned an interactive prompt
+# waiting on /dev/tty and the entire scan blocked.
 PWPROT="$(t_mktempdir pwprot)"
 # encrypted PEM private key (PKCS#8 with passphrase)
 openssl genrsa 2048 2>/dev/null \
@@ -113,8 +113,8 @@ openssl pkcs12 -export -in "$PWPROT/c.pem" -inkey "$PWPROT/k.pem" \
 openssl pkcs12 -export -in "$PWPROT/c.pem" -inkey "$PWPROT/k.pem" \
     -passout pass:changeit -out "$PWPROT/changeit.p12" 2>/dev/null
 
-# CB_SCAN_PATHS na sandbox; CB_SCAN_ROOT prazdny aby config refs nehledali
-# v hlavnim filesystemu
+# CB_SCAN_PATHS to sandbox; CB_SCAN_ROOT empty so config refs do not search
+# the main filesystem
 CB_SCAN_PATHS_ORIG="$CB_SCAN_PATHS"
 export CB_SCAN_PATHS="$PWPROT"
 unset CB_SCAN_ROOT

@@ -28,7 +28,7 @@ source "$CERT_ROOT/lib/common.sh"
 source "$CERT_ROOT/lib/hooks.sh"
 
 setup_hooks_dir() {
-    # /tmp on the host may be noexec - pouzij /var/tmp pripadne $HOME
+    # /tmp on the host may be noexec - use /var/tmp or $HOME instead
     local base
     for base in /var/tmp "$HOME" /dev/shm; do
         [[ -d "$base" && -w "$base" ]] || continue
@@ -204,7 +204,7 @@ RC=$?
 '
 
 # B.6.10: post-issue hook exit 1 - cb_run_hooks returns non-zero, but issue succeeded
-# Test that post-issue fail is logged, ne forced rollback v hook layeru
+# Test that post-issue fail is logged, not a forced rollback in the hook layer
 run "post-issue-hook-fail-no-rollback" '
 mkdir -p "$HOOKS_DIR/post-issue.d"
 cat > "$HOOKS_DIR/post-issue.d/95-postfail" <<"EOF"

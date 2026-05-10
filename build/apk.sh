@@ -101,7 +101,7 @@ chown -R builder:abuild "$BUILD"
 
 # Build - needs checksums + own key.
 # abuild -r (rootbld/index) may fail on trust signature, but .apk is already built
-# -> tolerujeme non-zero exit, detekce uspechu je pres find
+# -> tolerate non-zero exit, detect success via find
 set +e
 su - builder -c "cd $BUILD && abuild checksum && abuild -F -r"
 set -e
