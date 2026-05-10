@@ -1,0 +1,95 @@
+title = "certberus gitleaks config"
+
+# Build on the upstream default ruleset (HARICA EAB / generic JWT / cloud
+# tokens / etc.) and add project-specific rules + allowlists.
+[extend]
+useDefault = true
+
+# ---------- project-specific rules ----------
+
+# Real testing-droplet IPv4 addresses we have rotated out of history.
+# These should never come back. Sentinel only.
+[[rules]]
+id = "certberus-known-test-ip"
+description = "A previously-leaked testing-server IPv4 address"
+regex = '''\b(?:159\.223\.126\.181|159\.89\.50\.95|161\.35\.12\.147|161\.35\.216\.10|161\.35\.31\.160|165\.22\.189\.63|198\.211\.97\.90|204\.48\.28\.44|64\.227\.15\.69|143\.244\.148\.111|147\.182\.134\.185|157\.230\.10\.168|134\.209\.218\.42|159\.89\.94\.73|165\.227\.91\.186|161\.35\.54\.179|167\.172\.129\.161|167\.172\.147\.161|142\.93\.9\.96|159\.223\.169\.236|142\.93\.193\.68|161\.35\.111\.5|159\.89\.232\.81|157\.245\.81\.192|198\.199\.123\.151|143\.198\.174\.219|24\.144\.96\.83|157\.245\.245\.62|137\.184\.133\.251|159\.203\.186\.210|68\.183\.111\.161|165\.227\.193\.123)\b'''
+tags = ["certberus", "ip"]
+
+# Internal hostnames / domains we have rotated out of history.
+[[rules]]
+id = "certberus-internal-host"
+description = "Internal/operator hostname or domain"
+regex = '''(?i)\b(tristram\.civ\.zcu\.cz|phix-test2(?:\.zcu\.cz)?|ipmil\.civ\.zcu\.cz|onlytest\.zcu\.cz|civ\.zcu|zcu\.cz|horizonbasis\.com)\b'''
+tags = ["certberus", "host"]
+
+# Operator email
+[[rules]]
+id = "certberus-operator-email"
+description = "Operator personal email"
+regex = '''twinko9@gmail\.com'''
+tags = ["certberus", "email"]
+
+# Real HARICA EAB credentials (the ones that leaked in v0.1.17)
+[[rules]]
+id = "certberus-harica-eab-burned"
+description = "Burned HARICA EAB credential string"
+regex = '''(?:efBJL7YIn6l4noWkJuXq|2HZRNEkxzjx8Wg_GkQrpaYn4pFLCvkAC9MfVz2Pf-Dg|cbb61e9a-7754-40fe-bf41-7bbdd7e770df)'''
+tags = ["certberus", "secret", "harica"]
+
+# Generic HARICA EAB-shaped credentials so a future leak is caught even if
+# the value differs.
+[[rules]]
+id = "certberus-harica-eab-shape"
+description = "HARICA EAB key id (shape match: 20 alnum chars on --eab-kid)"
+regex = '''--eab-kid[\s=]+["']?[A-Za-z0-9_-]{16,32}["']?'''
+tags = ["certberus", "secret", "harica"]
+
+[[rules]]
+id = "certberus-harica-eab-hmac-shape"
+description = "HARICA EAB HMAC (shape match: long base64 on --eab-hmac)"
+regex = '''--eab-hmac[\s=]+["']?[A-Za-z0-9_/+=-]{32,}["']?'''
+tags = ["certberus", "secret", "harica"]
+
+[[rules]]
+id = "certberus-acme-account-uuid"
+description = "ACME account UUID embedded in --acme-url"
+regex = '''(?i)/acme/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/directory'''
+tags = ["certberus", "secret"]
+
+# ---------- allowlists ----------
+# Test fixtures and documentation use deliberately-fake placeholders.
+[[allowlists]]
+description = "detect-secrets baseline (hashed false positives, not real secrets)"
+paths = [
+  '''(^|/)\.secrets\.baseline$''',
+  '''(^|/)\.gitleaks\.toml$''',
+  '''(^|/)\.trufflehog-exclude\.txt$''',
+  '''(^|/)scripts/secret-scan\.sh$''',
+]
+
+[[allowlists]]
+description = "Test fixtures and docs that intentionally contain shaped-but-fake values"
+paths = [
+  '''(^|/)tests/''',
+  '''(^|/)docs/''',
+  '''(^|/)README\.md$''',
+  '''(^|/)CLAUDE\.md$''',
+]
+# Keywords / shapes that appear in tests + docs as templates, not as real
+# secrets. The detection itself is fine; we just don't want it to fire
+# inside test/doc files.
+regexes = [
+  '''YOUR_EAB_KID''',
+  '''YOUR_EAB_HMAC_KEY''',
+  '''YOUR-ACCOUNT-UUID''',
+  '''--eab-kid[\s=]+["']?(YOUR_EAB_KID|<EAB_KID>|test-kid)["']?''',
+  '''--eab-hmac[\s=]+["']?(YOUR_EAB_HMAC_KEY|<EAB_HMAC>|test-hmac)["']?''',
+  '''/acme/(YOUR-ACCOUNT-UUID|<UUID>)/directory''',
+  # well-known public DNS used as test fixtures
+  '''\b(8\.8\.8\.8|9\.9\.9\.9|1\.1\.1\.1)\b''',
+  # RFC 5737 documentation ranges
+  '''\b(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)\d+\b''',
+  # Loopback / link-local
+  '''\b127\.0\.0\.1\b''',
+  '''\b0\.0\.0\.0(:\d+)?\b''',
+]

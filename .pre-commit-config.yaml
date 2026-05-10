@@ -1,0 +1,36 @@
+---
+# pre-commit hooks - install with `pre-commit install`
+# Manually run all hooks: `pre-commit run --all-files`
+repos:
+  # Gitleaks - structured secret detection (custom rules in .gitleaks.toml)
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # detect-secrets - keyword + entropy based, audited via baseline
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: ^(\.git/|\.secrets\.baseline$)
+
+  # Built-in checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key
+      - id: detect-aws-credentials
+        args: ['--allow-missing-credentials']
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+
+  # Bash syntax check (defense-in-depth - certberus is pure bash)
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        args: ['-S', 'warning']
+        exclude: ^(tests/.*|build/.*\.in$)

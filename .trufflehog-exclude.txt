@@ -1,0 +1,3 @@
+tests/e2e-chaos.sh
+tests/integration/.*
+tests/unit/.*

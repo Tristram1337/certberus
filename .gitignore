@@ -20,3 +20,13 @@ Thumbs.db
 
 # Logy pri lokalnim vyvoji
 *.log
+
+# Stale test session artefakty (mohou obsahovat hostnamy, IP, real ACME challenges)
+e2e-logs/
+e2e-results/
+session-logs/
+
+# Secret-scan reports
+.gitleaks.json
+.trufflehog.json
+.detect-secrets.json
