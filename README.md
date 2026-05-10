@@ -418,11 +418,11 @@ Tested end-to-end (staging + production certs, external SSL verification):
 
 | OS | certbot-only | Apache (mod_md) | nginx (certbot) | Tomcat (certbot) | Jetty (certbot) | Caddy (native) | SELinux |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Debian 12 | **yes** | supported | **yes** | supported | supported | supported | — |
-| Debian 13 (trixie) | **yes** | **yes** | **yes** | **yes** | supported | supported | — |
-| Ubuntu 22.04 LTS | **yes** | supported | **yes** | supported | supported | supported | — |
-| Ubuntu 24.04 LTS | **yes** | **yes** | supported | **yes** | supported | supported | — |
-| Ubuntu 25.10 | **yes** | supported | **yes** | supported | supported | supported | — |
+| Debian 12 | **yes** | **yes** | **yes** | **yes** | **yes** | **yes** | — |
+| Debian 13 (trixie) | **yes** | **yes** | **yes** | **yes** | **yes** | **yes** | — |
+| Ubuntu 22.04 LTS | **yes** | **yes** | **yes** | **yes** (tomcat9) | **yes** | **yes** | — |
+| Ubuntu 24.04 LTS | **yes** | **yes** | **yes** | **yes** | **yes** | **yes** | — |
+| Ubuntu 25.10 | **yes** | **yes** | **yes** | **yes** | **yes** | **yes** | — |
 | Rocky Linux 8 | **yes** | **yes** | **yes** | **yes** | **yes** | **yes** | Enforcing |
 | Rocky Linux 9 | **yes** | **yes** | **yes** | **yes** | **yes** | **yes** | Enforcing |
 | Rocky Linux 10 | **yes** | **yes** | **yes** | **yes** | **yes** | **yes** | Enforcing |

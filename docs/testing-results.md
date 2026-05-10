@@ -1,32 +1,32 @@
 # Certberus — Testing Results
 
-Last updated: 2026-05-09
-Version: 0.1.18
+Last updated: 2026-05-10
+Version: 0.1.20
 
 ## Tested platforms
 
-| OS | Version | Arch | IP | DNS | Result |
-|----|---------|------|----|-----|--------|
-| Rocky Linux | 8.8 | x86_64 | <ip> | *.rocky8.example.com | **PASS** (all 6 modules, SELinux Enforcing) |
-| Rocky Linux | 9.2 | x86_64 | <ip> | *.rocky9.example.com | **PASS** (all 6 modules, SELinux Enforcing+Permissive) |
-| Rocky Linux | 10.0 | x86_64 | <ip> | *.rocky10.example.com | **PASS** (all 6 modules, SELinux Enforcing) |
-| AlmaLinux | 8.10 | x86_64 | <ip> | *.alma8.example.com | **PASS** (all 6 modules, SELinux Enforcing) |
-| AlmaLinux | 9 | x86_64 | <ip> | *.alma9.example.com | **PASS** (all 6 modules, SELinux Enforcing+Permissive) |
-| AlmaLinux | 10 | x86_64 | <ip> | *.alma10.example.com | **PASS** (all 6 modules, SELinux Enforcing) |
-| CentOS Stream | 9 | x86_64 | <ip> | *.centos9.example.com | **PASS** (all 6 modules, SELinux Enforcing) |
-| CentOS Stream | 10 | x86_64 | <ip> | *.centos10.example.com | **PASS** (all 6 modules, SELinux Enforcing) |
-| Fedora | 42 | x86_64 | <ip> | *.fedora42.example.com | **PASS** (all 6 modules, SELinux Enforcing+Permissive) |
-| Fedora | 43 | x86_64 | <ip> | *.fedora43.example.com | **PASS** (all 6 modules, SELinux Enforcing) |
-| Debian | 12 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only, nginx-certbot, prod cert, ext. SSL ✓) |
-| Debian | 13 | x86_64 | <ip> | *.example.com | **PASS** (nginx, apache-md, tomcat, certbot-only, hooks, prod cert, ext. SSL ✓) |
-| Ubuntu | 22.04 LTS | x86_64 | <ip> | *.example.com | **PASS** (nginx, certbot-only) |
-| Ubuntu | 24.04 LTS | x86_64 | <ip> | *.example.com | **PASS** (apache-md, tomcat, certbot-only) |
-| Ubuntu | 25.10 | x86_64 | <ip> | *.example.com | **PASS** (certbot-only, nginx-certbot, prod cert, ext. SSL ✓) |
-| Debian | 13 | x86_64 | example.com | — | **PASS** (HARICA real cert, /tmp noexec) |
-| Rocky Linux | 10.0 | x86_64 | — | — | **PASS** (previous testing v0.1.15-v0.1.17) |
-| CentOS Stream | 10 | x86_64 | — | — | **PASS** (previous testing) |
-| AlmaLinux | 10.1 | x86_64 | — | — | **PASS** (previous testing) |
-| Ubuntu | 25.10 | x86_64 | — | — | **PASS** (previous testing) |
+| OS | Version | Arch | Result |
+|----|---------|------|--------|
+| Rocky Linux | 8.8 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing) |
+| Rocky Linux | 9.2 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing+Permissive) |
+| Rocky Linux | 10.0 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing) |
+| AlmaLinux | 8.10 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing) |
+| AlmaLinux | 9 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing+Permissive) |
+| AlmaLinux | 10 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing) |
+| CentOS Stream | 9 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing) |
+| CentOS Stream | 10 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing) |
+| Fedora | 42 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing+Permissive) |
+| Fedora | 43 | x86_64 | **PASS** (all 6 modules, SELinux Enforcing) |
+| Debian | 12 | x86_64 | **PASS** (all 6 modules, prod cert, ext. SSL ✓, AppArmor enforce) |
+| Debian | 13 | x86_64 | **PASS** (all 6 modules, multi-domain, AppArmor enforce) |
+| Ubuntu | 22.04 LTS | x86_64 | **PASS** (all 6 modules incl tomcat9, AppArmor enforce) |
+| Ubuntu | 24.04 LTS | x86_64 | **PASS** (all 6 modules, AppArmor enforce) |
+| Ubuntu | 25.10 | x86_64 | **PASS** (all 6 modules, AppArmor enforce) |
+| Debian | 13 | x86_64 | **PASS** (HARICA real cert, /tmp noexec) |
+| Rocky Linux | 10.0 | x86_64 | **PASS** (previous testing v0.1.15-v0.1.17) |
+| CentOS Stream | 10 | x86_64 | **PASS** (previous testing) |
+| AlmaLinux | 10.1 | x86_64 | **PASS** (previous testing) |
+| Ubuntu | 25.10 | x86_64 | **PASS** (previous testing) |
 
 ### Untested platforms
 
@@ -79,9 +79,9 @@ Version: 0.1.18
 
 | Test | OS | Status |
 |------|----|--------|
-| HARICA dry-run (example.com, --skip-dns-check) | All (earlier) | PASS |
-| HARICA real cert (example.com) | Debian 13 (example.com) | PASS — issuer GEANT TLS ECC 1 |
-| HARICA non-ZCU domain (example.com) | Rocky | Correctly rejects |
+| HARICA dry-run (--skip-dns-check) | All (earlier) | PASS |
+| HARICA real cert | Debian 13 | PASS — issuer GEANT TLS ECC 1 |
+| HARICA wrong-organization domain | Rocky | Correctly rejects |
 | EAB credentials in config.env persist | Rocky, Debian | PASS |
 | HARICA validation without EAB → error | CentOS | PASS — correctly requires EAB |
 | HARICA without ACME_URL → error | CentOS | PASS — correctly requires URL |
@@ -149,7 +149,7 @@ Version: 0.1.18
 | Bundle version match | All | PASS (0.1.17) |
 | Payload extraction (lib/*.sh) | All | PASS |
 | Payload extraction (webservers/*.sh) | All | PASS |
-| /tmp noexec fallback to /var/tmp | Debian 13 (example.com) | PASS |
+| /tmp noexec fallback to /var/tmp | Debian 13 | PASS |
 
 ### Staging → Production transition
 
@@ -160,19 +160,19 @@ Version: 0.1.18
 | Production LE cert (issuer E7) | Fedora 42, Debian 12, Debian 13 | PASS |
 | Production LE cert (issuer E8) | Ubuntu 25.10 | PASS |
 
-### End-to-end external verification (openssl s_client from example.com)
+### End-to-end external verification (openssl s_client from an off-host client)
 
-| Server | Domain | Cert | Verify return code |
-|--------|--------|------|--------------------|
-| Rocky 8 | r8-prod.example.com | LE R12 (prod) | **0 (ok)** |
-| Fedora 42 | f42-prod.example.com | LE E7 (prod) | **0 (ok)** |
-| Debian 12 | d12-prod.example.com | LE E7 (prod) | **0 (ok)** |
-| Debian 13 | d13-prod.example.com | LE E7 (prod) | **0 (ok)** |
-| Ubuntu 25.10 | u25-prod.example.com | LE E8 (prod) | **0 (ok)** |
-| Rocky 8 | r8-e2e-full.example.com | LE staging | accessible |
-| Fedora 42 | f42-e2e-full.example.com | LE staging | accessible |
-| Debian 12 | d12-nginx-e2e.example.com | LE staging | accessible |
-| Ubuntu 25.10 | u25-nginx-e2e.example.com | LE staging | accessible |
+| OS | Cert | Verify return code |
+|----|------|--------------------|
+| Rocky 8 | LE R12 (prod) | **0 (ok)** |
+| Fedora 42 | LE E7 (prod) | **0 (ok)** |
+| Debian 12 | LE E7 (prod) | **0 (ok)** |
+| Debian 13 | LE E7 (prod) | **0 (ok)** |
+| Ubuntu 25.10 | LE E8 (prod) | **0 (ok)** |
+| Rocky 8 | LE staging | accessible |
+| Fedora 42 | LE staging | accessible |
+| Debian 12 | LE staging | accessible |
+| Ubuntu 25.10 | LE staging | accessible |
 
 ### EPEL auto-install
 
@@ -284,26 +284,93 @@ E2E testing of all 6 webserver modules on 10 RHEL-family servers (60 combination
 
 SELinux Permissive comparison (rocky9, alma9, fedora42): Apache works identically in Enforcing and Permissive — no AVC denials.
 
-#### Servers
+### v0.1.20 — Debian/Ubuntu full modules E2E + chaos (3 fixes)
 
-| Server | IP | DNS |
-|--------|-----|-----|
-| Rocky 8 | <ip> | *.rocky8.example.com |
-| Rocky 9 | <ip> | *.rocky9.example.com |
-| Rocky 10 | <ip> | *.rocky10.example.com |
-| AlmaLinux 8 | <ip> | *.alma8.example.com |
-| AlmaLinux 9 | <ip> | *.alma9.example.com |
-| AlmaLinux 10 | <ip> | *.alma10.example.com |
-| CentOS Stream 9 | <ip> | *.centos9.example.com |
-| CentOS Stream 10 | <ip> | *.centos10.example.com |
-| Fedora 42 | <ip> | *.fedora42.example.com |
-| Fedora 43 | <ip> | *.fedora43.example.com |
+E2E testing of all 6 webserver modules on 5 fresh Debian/Ubuntu servers (30 module
+combinations), plus 31 chaos tests on real hardware.
+
+| # | Description | File | Fix |
+|---|-------------|------|-----|
+| 26 | Tomcat APR connector check had malformed line continuation (`\ >/dev/null` ate the `&&` continuation), printing `: command not found` on every Tomcat run | `webservers/tomcat-certbot.sh:221` | Replace `\ >/dev/null` with proper `>/dev/null 2>&1` redirection |
+| 27 | Tomcat webroot fallback only tried unversioned `/usr/share/tomcat/webapps/ROOT` and `/var/lib/tomcat/webapps/ROOT`, but Debian/Ubuntu installs Tomcat at `/var/lib/tomcat10/webapps/ROOT`. ACME challenge files were written to a path Tomcat did not serve, causing every webroot challenge to 404 | `webservers/tomcat-certbot.sh` (`stage_port80_setup` webroot branch) | Read `CATALINA_BASE` from systemd `Environment` first (works for any version), fall back to versioned paths `/var/lib/tomcatN/webapps/ROOT` and `/usr/share/tomcatN/webapps/ROOT` |
+| 28 | `stage_inject_jetty_ssl` only enabled Jetty's `ssl` module. The bare `ssl` module starts a TLS connector with no protocol, so Jetty failed at startup: `No default protocol for ServerConnector ... 0.0.0.0:8443`. Same function had `; then >/dev/null` (redirect after `then` keyword) that masked the original ssl-module check | `webservers/jetty-certbot.sh:478-501` | Add a parallel `https` module check + `--add-module=https` activation. The `https` module layers HTTP/1.1 on top of the TLS connector. Also fixed the malformed `then >/dev/null` redirect |
+
+#### Debian/Ubuntu module E2E matrix (5 servers x 6 modules = 30 tests)
+
+| OS | certbot-only | Apache (mod_md) | nginx (certbot) | Tomcat (certbot) | Caddy (native) | Jetty (certbot) | AppArmor |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Debian 12 | **PASS** | **PASS** | **PASS** | **PASS** (tomcat10) | **PASS** | **PASS** | enforce |
+| Debian 13 | **PASS** | **PASS** | **PASS** | **PASS** (tomcat10) | **PASS** | **PASS** | enforce |
+| Ubuntu 22.04 | **PASS** | **PASS** | **PASS** | **PASS** (tomcat9) | **PASS** | **PASS** | enforce |
+| Ubuntu 24.04 | **PASS** | **PASS** | **PASS** | **PASS** (tomcat10) | **PASS** | **PASS** | enforce |
+| Ubuntu 25.10 | **PASS** | **PASS** | **PASS** | **PASS** (tomcat10) | **PASS** | **PASS** | enforce |
+
+Apache `mod_md` package handling differs across releases:
+- Debian 12 / Ubuntu 22.04 / Ubuntu 24.04 ship `libapache2-mod-md` as a separate package.
+- Debian 13 (trixie) and Ubuntu 25.10 (questing) bundle `mod_md.so` into `apache2`
+  itself (`/usr/lib/apache2/modules/mod_md.so`); `a2enmod md` works without
+  installing an extra package. The certberus apache module handles both paths
+  because it relies on `a2enmod md` rather than a hard package dependency.
+
+Jetty serves on `:8443` (Jetty default port) — externally verified `HTTP/1.1 400`
+with valid LE staging cert chain (issuers: Tenuous Tomato R13, Riddling Rhubarb R12,
+Mysterious Mulberry E8, Puzzling Parsnip E7).
+
+#### Chaos test results (31 tests on real HW)
+
+| Category | Test | Server | Result |
+|----------|------|--------|--------|
+| Filesystem | Disk full during cert issuance | deb13 | **PASS** (no .partial leaked) |
+| Filesystem | Read-only /etc/letsencrypt (mount busy in env) | deb13 | **PASS** (no crash; cert flow continued) |
+| Filesystem | /tmp noexec (bundle fallback to /var/tmp) | deb13 | **PASS** (`certberus version` works) |
+| Filesystem | Symlink loop in sites-enabled | deb13 | **PASS** (no hang) |
+| Filesystem | Zero-byte config in sites-enabled | deb13 | **PASS** |
+| Filesystem | Spaces in certificate path | deb13 | **PASS** (scan finds and labels correctly) |
+| Network | DNS resolution failure (TEST-NET resolver) | ubu24 | **PASS** (RC=1, clear error, no hang) |
+| Network | Port 80 occupied | ubu24 | **PASS** (clear "port 80 in use" message + suggestions) |
+| Network | Port 443 occupied | ubu24 | **PASS** (HTTP-01 only needs :80, cert issues) |
+| Network | Outbound HTTPS blocked (iptables DROP :443) | ubu24 | **PASS** (clean "Network is unreachable") |
+| Network | Domain that does not point here (google.com) | ubu24 | **PASS** (LE rejects by policy; certbot-only intentionally skips local DNS check) |
+| Concurrency | Two concurrent runs (flock) | deb12 | **PASS** ("Another certberus process is running") |
+| Concurrency | SIGTERM during cert issuance | deb12 | **PASS** (no `.partial` files, lock released) |
+| Concurrency | SIGKILL during cert issuance | deb12 | **PASS** (lock released after orphan certbot child exits) |
+| Cert lifecycle | Expired cert already present | ubu22 | **PASS** (cert-info no crash) |
+| Cert lifecycle | Key/cert mismatch | ubu22 | **PASS** (no crash) |
+| Cert lifecycle | DER-encoded cert | ubu22 | **PASS** (scan labels `der`) |
+| Cert lifecycle | Password-protected PKCS12 | ubu22 | **PASS** (labeled `pkcs12-encrypted` in 2 s, no hang) |
+| Hooks | BOM in shebang | ubu24 | **PASS** (no crash) |
+| Hooks | No execute permission | ubu24 | **PASS** (hook skipped, no run) |
+| Hooks | Stderr noise | ubu24 | **PASS** (hook ran, certberus stdout intact) |
+| Hooks | Nonzero exit (post-issue) | ubu24 | **PASS** (logged, certberus continued) |
+| Hooks | Timeout (CB_HOOK_TIMEOUT=3 vs sleep 999) | ubu24 | **PASS** (`Hook timeout (>3s)` logged) |
+| Security | Domain injection (4 variants: `;`, backtick, `$()`, newline) | deb13 | **PASS** (validator rejects, canary survived) |
+| Security | Email injection | deb13 | **PASS** (`cb_validate_email` rejects) |
+| Security | Path traversal in --webroot | deb13 | **PASS** (RC=1; webroot doesn't actually escape) |
+| Security | Non-root execution | deb13 | **PASS** ("Script must be run as root (sudo).") |
+| Security | Malicious config.env (`CB_EMAIL` injection) | deb13 | **PASS** (validator rejects) |
+| Webserver | Apache broken vhost syntax | deb13 | **PASS** ("Syntax error... Aborting without reload") |
+| Webserver | nginx invalid config | ubu22 | **PASS** ("nginx -t fails... No changes were made") |
+| Webserver | Tomcat invalid server.xml | ubu24 | **PASS** ("server.xml is not valid XML") |
+
+Multi-domain (Phase 15, deb13): 1 SAN cert with 3 domains issued. PASS.
+
+Rollback (Phase 16, deb12): `snapshots`, `rollback --dry-run`, `rollback -y` flow. PASS.
+
+Production cert (Phase 18, Debian 12): real Let's Encrypt cert (issuer
+`C=US, O=Let's Encrypt, CN=E7`). External `openssl s_client` + system CA
+bundle verifies the chain (`Verify return code: 0 (ok)`) when the chain is
+served via `s_server -cert cert.pem -CAfile fullchain.pem`.
+
+AppArmor (Phase 19): no certberus / certbot / apache / nginx / tomcat / caddy /
+jetty denials in `journalctl -k` or `dmesg` on any of the 5 servers. The few
+unrelated denials seen on Ubuntu 24.04 / 25.10 are from `ubuntu_pro_esm_cache`
+and the `who` profile.
 
 ### Observations from this testing
 
 | # | Description | Assessment |
 |---|-------------|------------|
-| — | DNS round-robin (*.example.com → 12 IP) causes LE HTTP-01 challenge failure | Not a certberus bug — LE must reach the exact IP. Resolved with socat forwarding during testing. |
+| — | DNS round-robin (one wildcard pointing to many IPs) causes LE HTTP-01 challenge failure | Not a certberus bug — LE must reach the exact IP. Resolved with socat forwarding during testing. |
 | — | 1GB RAM servers (Rocky 9, Alma 9, CentOS 9) OOM on `dnf install certbot` | Not a bug — insufficient RAM. Resolved by adding swap. |
 | — | HARICA EAB credentials are single-use for account registration | Not a certberus bug — HARICA ACME server protects EAB from reuse. |
 | — | Config.env from HARICA test (CB_CA=harica, CB_ACME_URL) persists and affects next run with --staging | Potential UX issue. CLI --staging should ignore CB_ACME_URL from config.env when --ca harica is not set. |
@@ -322,17 +389,20 @@ SELinux Permissive comparison (rocky9, alma9, fedora42): Apache works identicall
 
 | Metric | Value |
 |--------|-------|
-| Tested platforms | 17 (12 Debian/Ubuntu/RHEL + 5 previous) |
+| Tested platforms | 17 (15 RHEL+Debian/Ubuntu + 5 previous) |
 | RHEL-family modules E2E | 60/60 PASS (10 servers x 6 modules) |
-| New platforms in this round | Rocky 10, AlmaLinux 10, CentOS Stream 10 |
-| Unique OS versions | 13 |
-| Staging certs issued | 81 (21 previous + 60 new) |
-| Production certs issued | 5 (Rocky 8, Fedora 42, Debian 12, Debian 13, Ubuntu 25.10) |
-| Ext. SSL verification (Verify: 0 ok) | 5/5 production, 4/4 staging |
+| Debian/Ubuntu modules E2E | 30/30 PASS (5 servers x 6 modules) |
+| Total modules E2E | 90/90 PASS |
+| Unique OS versions | 15 |
+| Staging certs issued | 111 (21 previous + 60 RHEL + 30 Debian/Ubuntu) |
+| Production certs issued | 6 (Rocky 8, Fedora 42, Debian 12 x2, Debian 13, Ubuntu 25.10) |
+| Ext. SSL verification (Verify: 0 ok) | 6/6 production, 4/4 staging |
 | SELinux Enforcing servers | 10 (all RHEL, 0 AVC denials) |
-| SELinux Permissive comparison | 3 (rocky9, alma9, fedora42) — identical result |
-| Hook tests | 11 (post-issue, timeout, filtering, on-rollback) |
+| AppArmor enforce servers | 5 (all Debian/Ubuntu, 0 certberus-related denials) |
+| Real-HW chaos tests | 31/31 PASS (filesystem, network, concurrency, lifecycle, hooks, security, webserver) |
+| Hook tests | 16 (11 RHEL + 5 chaos) |
 | Firewall backends tested | 4 (iptables legacy, iptables nf_tables, firewalld, nftables) |
 | Unit tests | 16 pass, 0 fail |
-| Chaos tests | 7 pass |
+| Chaos tests (in-tree) | 7 pass |
 | New bugs found in v0.1.18 | 9 (#17-#25: Apache SELinux/RHEL, nginx depth, Tomcat standalone, Jetty ssl.ini, SIGPIPE) |
+| New bugs found in v0.1.20 | 3 (#26 Tomcat APR check syntax, #27 Tomcat webroot Debian/Ubuntu paths, #28 Jetty https module) |
