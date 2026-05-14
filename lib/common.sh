@@ -257,11 +257,55 @@ cb_snapshot_restore() {
         return 1
     fi
     if [[ "$CB_DRY_RUN" == "1" ]]; then
-        cb_log "[DRY-RUN] tar -xzf $snap -C /"
+        cb_log "[DRY-RUN] exact-restore $snap -> /"
         return 0
     fi
+    if ! tar -tzf "$snap" >/dev/null 2>&1; then
+        cb_error "Rollback: snapshot is corrupted or not a gzip-tar: $snap"
+        return 1
+    fi
+
+    # Exact restore. A plain `tar -x` puts the snapshot's files back but leaves
+    # files CREATED after the snapshot in place - so the rollback would not be
+    # a true revert (stale certberus-md.conf, mods-enabled symlinks, .bak files
+    # would linger). Build the set of paths the snapshot contains, find its
+    # top-level roots, and within each root delete anything not in the
+    # snapshot - then extract. Pure tar/find/coreutils, no rsync dependency.
+    local -A _snap_has=()
+    local _p
+    while IFS= read -r _p; do
+        _p="${_p#./}"; _p="${_p%/}"
+        [[ -n "$_p" ]] && _snap_has["$_p"]=1
+    done < <(tar -tzf "$snap" 2>/dev/null)
+
+    # Roots = archive paths whose parent is not itself in the archive.
+    local -a _roots=()
+    local _parent
+    for _p in "${!_snap_has[@]}"; do
+        _parent="${_p%/*}"
+        [[ "$_parent" == "$_p" ]] && _parent=""
+        [[ -z "$_parent" || -z "${_snap_has[$_parent]:-}" ]] && _roots+=("$_p")
+    done
+
+    # Prune files added after the snapshot, strictly within each root. Safety:
+    # a root must be at least two path components deep (e.g. etc/apache2) -
+    # never prune something as broad as /etc or /usr.
+    local _root _real _rel
+    for _root in "${_roots[@]}"; do
+        if [[ "$_root" != */* ]]; then
+            cb_warn "Rollback: root '/$_root' is too shallow to prune safely - extract-only for this path"
+            continue
+        fi
+        [[ -e "/$_root" ]] || continue
+        while IFS= read -r _real; do
+            _rel="${_real#/}"
+            [[ -n "${_snap_has[$_rel]:-}" ]] && continue
+            rm -rf -- "$_real" 2>/dev/null || true
+        done < <(find "/$_root" -mindepth 1 -depth 2>/dev/null)
+    done
+
     if tar -xzf "$snap" -C / 2>&1 | tee -a "$CB_LOG_FILE"; then
-        cb_ok "Snapshot restored: $snap"
+        cb_ok "Snapshot restored (exact): $snap"
         return 0
     fi
     cb_error "Rollback failed"

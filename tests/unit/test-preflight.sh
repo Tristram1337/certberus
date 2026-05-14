@@ -177,6 +177,26 @@ echo "modified" > "$FAKE_D/file.txt"
 cb_snapshot_restore "$SNAP" >/dev/null 2>&1
 CONTENT=$(cat "$FAKE_D/file.txt")
 [[ "$CONTENT" == "original" ]] && _pass "snapshot_restore returned original content" || _fail "got '$CONTENT'"
+
+echo "=== Test 4b: cb_snapshot_restore is an EXACT restore (prunes added files) ==="
+# Regression: a plain `tar -x` restore leaves files created after the snapshot
+# in place, so rollback was not a true revert (stale certberus-md.conf,
+# mods-enabled symlinks, .bak files lingered). cb_snapshot_restore must remove
+# anything not in the snapshot.
+echo "original" > "$FAKE_D/file.txt"
+mkdir -p "$FAKE_D/subdir"
+echo "ADDED-after-snapshot"        > "$FAKE_D/added.txt"
+echo "ADDED-in-subdir"             > "$FAKE_D/subdir/added2.txt"
+ln -s /etc/hostname                  "$FAKE_D/added-symlink"
+cb_snapshot_restore "$SNAP" >/dev/null 2>&1
+if [[ ! -e "$FAKE_D/added.txt" && ! -e "$FAKE_D/subdir" && ! -L "$FAKE_D/added-symlink" ]]; then
+    _pass "files/dirs/symlinks added after the snapshot were pruned on restore"
+else
+    _fail "exact restore left behind: $(ls -A "$FAKE_D" | tr '\n' ' ')"
+fi
+[[ -f "$FAKE_D/file.txt" && "$(cat "$FAKE_D/file.txt")" == "original" ]] \
+    && _pass "snapshotted file still restored correctly alongside the prune" \
+    || _fail "snapshotted file lost during exact restore"
 rm -rf "$(dirname "$FAKE_D")" "$SNAP"
 
 echo "=== Test 5: cb_auto_rollback (with CB_AUTO_ROLLBACK=1) ==="
