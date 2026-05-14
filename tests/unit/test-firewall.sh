@@ -675,6 +675,92 @@ assert_contains "$calls" "--add-port=8443/tcp" \
 assert_contains "$calls" "--reload" "redirect firewalld: reload"
 
 # ============================================================================
+# 12) cb_firewall_port_open_to_world — reachability inspection
+#     (no network probe, no domain needed — pure ruleset inspection)
+# ============================================================================
+t_info "=== cb_firewall_port_open_to_world ==="
+
+# Mock iptables-save with an arbitrary multi-line ruleset.
+mock_iptables_save() {
+    {
+        echo '#!/bin/bash'
+        echo "cat <<'RULES'"
+        printf '%s\n' "$1"
+        echo 'RULES'
+    } > "$MOCK/iptables-save"
+    chmod +x "$MOCK/iptables-save"
+}
+
+reset_mocks; CB_FW_BACKEND="iptables-nft"
+mock_iptables_save '*filter
+:INPUT DROP [0:0]
+-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A INPUT -s 10.0.0.0/8 -j ACCEPT
+-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT
+-A SUBCHAIN -i lo -j ACCEPT
+COMMIT'
+assert_eq "closed" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "iptables DROP policy, only restricted accepts -> closed"
+
+reset_mocks; CB_FW_BACKEND="iptables-nft"
+mock_iptables_save '*filter
+:INPUT DROP [0:0]
+-A INPUT -p tcp -m tcp --dport 80 -j ACCEPT
+COMMIT'
+assert_eq "open" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "iptables explicit --dport 80 ACCEPT -> open"
+
+reset_mocks; CB_FW_BACKEND="iptables-nft"
+mock_iptables_save '*filter
+:INPUT ACCEPT [0:0]
+COMMIT'
+assert_eq "open" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "iptables default-ACCEPT policy -> open"
+
+reset_mocks; CB_FW_BACKEND="iptables-nft"
+mock_iptables_save '*filter
+:INPUT DROP [0:0]
+-A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
+COMMIT'
+assert_eq "open" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "iptables multiport incl. 80 -> open"
+
+reset_mocks; CB_FW_BACKEND="iptables-nft"
+make_mock "iptables-save" "" 1
+assert_eq "unknown" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "iptables-save failure -> unknown (never a false 'closed')"
+
+reset_mocks; CB_FW_BACKEND="firewalld"
+make_mock "firewall-cmd" "" 0
+assert_eq "open" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "firewalld query-port success -> open"
+
+reset_mocks; CB_FW_BACKEND="firewalld"
+make_mock "firewall-cmd" "" 1
+assert_eq "closed" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "firewalld query-port fail -> closed"
+
+reset_mocks; CB_FW_BACKEND="ufw"
+make_mock "ufw" "Status: active
+80/tcp                     ALLOW       Anywhere"
+assert_eq "open" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "ufw 80/tcp ALLOW -> open"
+
+reset_mocks; CB_FW_BACKEND="ufw"
+make_mock "ufw" "Status: active
+22/tcp                     ALLOW       Anywhere"
+assert_eq "closed" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "ufw without 80/tcp -> closed"
+
+reset_mocks; CB_FW_BACKEND="none"
+assert_eq "open" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "backend none -> open (nothing in the way)"
+
+reset_mocks; CB_FW_BACKEND="docker"
+assert_eq "unknown" "$(cb_firewall_port_open_to_world tcp 80)" \
+    "backend docker -> unknown (host-managed)"
+
+# ============================================================================
 # Summary
 # ============================================================================
 t_summary

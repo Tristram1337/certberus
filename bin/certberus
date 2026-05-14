@@ -10,7 +10,7 @@
 #
 set -uo pipefail
 
-CB_VERSION="0.2.1"
+CB_VERSION="0.2.2"
 
 # Locate libraries - dev mode (repo) or installed mode
 _SELF_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -703,28 +703,9 @@ cmd_auto() {
             "${CLI_EAB_KID:-}" "${CLI_EAB_HMAC:-}" "${CLI_ACME_URL:-}" || true
     fi
 
-    # Port-80 pre-flight: if admin didn't use --firewall, verify that
-    # ACME HTTP-01 has a chance. Failure is not fatal (mod_md retries next day),
-    # but we want admin to know what to do. Test is per-domain.
-    if [[ "${CB_FIREWALL_AUTO_OPEN:-0}" != "1" && "${CB_SKIP_PORT80_CHECK:-0}" != "1" ]]; then
-        local _doms="${CLI_DOMAINS:-${CB_DOMAINS:-}}"
-        local _first_dom; _first_dom=$(echo "$_doms" | tr -s ' ' '\n' | grep -v '^$' | head -1)
-        if [[ -n "$_first_dom" ]]; then
-            if ! timeout 4 bash -c "exec 3<>/dev/tcp/$_first_dom/80; exec 3>&-" 2>/dev/null; then
-                cb_warn "Port 80 on ${_first_dom} appears closed from outside (ACME HTTP-01 will fail)."
-                cb_log "  Solutions:"
-                cb_log "    A) temporarily open FW during issuance:"
-                cb_log "         certberus auto --firewall --email $email${_first_dom:+ --domain $_first_dom}"
-                cb_log "    B) open manually in existing policy (iptables/ufw/firewalld) then:"
-                cb_log "         certberus auto"
-                cb_log "    C) skip this check (proceed anyway):"
-                cb_log "         CB_SKIP_PORT80_CHECK=1 certberus auto"
-                cb_log ""
-                cb_log "  (CA needs GET on http://${_first_dom}/.well-known/acme-challenge/<token>)"
-                exit 2
-            fi
-        fi
-    fi
+    # ACME HTTP-01 port-80 reachability is checked centrally in
+    # cmd_issue_webserver, so it covers 'auto', 'install' and 'issue' alike
+    # (and the common case where domains are auto-detected, CB_DOMAINS empty).
 
     cmd_issue "$@"
 }
@@ -749,6 +730,40 @@ cmd_issue_webserver() {
         *) cb_die "Unknown webserver: $ws" ;;
     esac
     [[ -x "$script" ]] || cb_die "Script not found: $script"
+
+    # ACME HTTP-01 needs the CA to reach tcp/80 from the internet. Inspect the
+    # firewall ruleset directly (no domain needed, no flaky self-probe) so this
+    # also fires when domains are auto-detected and CB_DOMAINS is empty.
+    # certberus does NOT touch the firewall unless --firewall was given.
+    if [[ "${CB_FIREWALL_AUTO_OPEN:-0}" != "1" && "${CB_SKIP_PORT80_CHECK:-0}" != "1" ]]; then
+        cb_log "Scanning firewall for inbound tcp/80 ($(cb_firewall_backend_pretty))..."
+        case "$(cb_firewall_port_open_to_world tcp 80)" in
+            open)
+                cb_ok "Firewall: inbound tcp/80 is open"
+                ;;
+            unknown)
+                cb_warn "Firewall: could not determine whether inbound tcp/80 is reachable."
+                cb_warn "  If ACME validation times out, open tcp/80 for the CA or re-run with --firewall."
+                ;;
+            closed)
+                cb_error "######################################################################"
+                cb_error "  THIS WILL NOT WORK: the firewall is CLOSED for inbound tcp/80."
+                cb_error ""
+                cb_error "  ACME HTTP-01 needs the CA to fetch"
+                cb_error "      http://<your-domain>/.well-known/acme-challenge/<token>"
+                cb_error "  and the host firewall ($(cb_firewall_backend_pretty)) blocks tcp/80."
+                cb_error ""
+                cb_error "  certberus does NOT change the firewall unless you ask it to. Options:"
+                cb_error "    A) let certberus open tcp/80 (+443) for the issuance:"
+                cb_error "         certberus install --firewall"
+                cb_error "    B) open tcp/80 yourself in the existing policy, then re-run"
+                cb_error "    C) proceed anyway (ACME keeps failing until 80 is reachable):"
+                cb_error "         CB_SKIP_PORT80_CHECK=1 certberus install"
+                cb_error "######################################################################"
+                cb_die "Inbound tcp/80 is firewalled - ACME HTTP-01 cannot succeed."
+                ;;
+        esac
+    fi
 
     cb_log "Using: $script"
     local -a fwd=()

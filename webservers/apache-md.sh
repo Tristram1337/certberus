@@ -889,11 +889,27 @@ stage_fix_ssl_vhosts() {
 }
 
 stage_firewall() {
+    cb_sep
+    # Whether inbound tcp/80 is reachable was already scanned (and, without
+    # --firewall, enforced) by cmd_issue_webserver before this script started.
+    # Here we only act on it: open the ports when --firewall was given.
     if cb_firewall_acme_auto_open_enabled; then
+        local before; before="$(cb_firewall_port_open_to_world tcp 80)"
+        if [[ "$before" == "open" ]]; then
+            cb_ok "Firewall: inbound tcp/80 already open - nothing to do"
+            return 0
+        fi
+        cb_log "Firewall: opening tcp/80 + tcp/443 ($(cb_firewall_backend_pretty))"
         cb_firewall_snapshot >/dev/null
         cb_firewall_ensure_http_https
+        local after; after="$(cb_firewall_port_open_to_world tcp 80)"
+        case "$after" in
+            open)    cb_ok   "Firewall: tcp/80 is now open" ;;
+            unknown) cb_warn "Firewall: could not confirm tcp/80 is open - verify with: $(cb_firewall_backend_pretty)" ;;
+            closed)  cb_warn "Firewall: tcp/80 still looks closed after the attempt - a managed/upstream firewall may override local rules" ;;
+        esac
     else
-        cb_debug "Firewall auto-open skipped"
+        cb_log "Firewall: leaving rules unchanged (--firewall not given)"
     fi
 }
 

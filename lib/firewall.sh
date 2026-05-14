@@ -64,6 +64,88 @@ cb_firewall_backend_pretty() {
     esac
 }
 
+# -------- Reachability inspection --------
+# cb_firewall_port_open_to_world PROTO PORT
+# Inspects the active firewall ruleset (no network probe, no domain needed) and
+# reports whether an arbitrary host on the internet could reach PROTO/PORT.
+# Echoes exactly one of:
+#   open    - default-accept policy, or an unrestricted ACCEPT for the port
+#   closed  - default-drop/reject policy with no unrestricted ACCEPT found
+#   unknown - no readable/managed firewall, or the ruleset could not be parsed
+# Biased away from a false "closed": when in doubt it returns "unknown", never
+# "closed" - a wrong "closed" would block an otherwise working install.
+cb_firewall_port_open_to_world() {
+    local proto="$1" port="$2"
+    case "$CB_FW_BACKEND" in
+        none)
+            echo "open"; return 0 ;;          # nothing in the way
+        docker)
+            echo "unknown"; return 0 ;;        # host-managed, not ours to read
+        firewalld)
+            if firewall-cmd --query-port="${port}/${proto}" >/dev/null 2>&1; then
+                echo "open"
+            else
+                echo "closed"
+            fi
+            return 0 ;;
+        ufw)
+            local us; us="$(ufw status 2>/dev/null)" || { echo "unknown"; return 0; }
+            [[ -z "$us" ]] && { echo "unknown"; return 0; }
+            if printf '%s\n' "$us" | grep -qE "(^|[[:space:]])${port}/${proto}([[:space:]]|$).*ALLOW"; then
+                echo "open"
+            else
+                echo "closed"
+            fi
+            return 0 ;;
+        nftables)
+            local rs; rs="$(nft list ruleset 2>/dev/null)" || { echo "unknown"; return 0; }
+            [[ -z "$rs" ]] && { echo "unknown"; return 0; }
+            if printf '%s\n' "$rs" | grep -qE "${proto} dport (${port}\b|\{[^}]*\b${port}\b[^}]*\}).*accept"; then
+                echo "open"
+            else
+                echo "closed"
+            fi
+            return 0 ;;
+        iptables-nft|iptables-legacy)
+            local dump; dump="$(iptables-save -t filter 2>/dev/null)" || { echo "unknown"; return 0; }
+            [[ -z "$dump" ]] && { echo "unknown"; return 0; }
+            local pol
+            pol="$(printf '%s\n' "$dump" | sed -n 's/^:INPUT \([A-Z]*\).*/\1/p')"
+            [[ -z "$pol" ]] && { echo "unknown"; return 0; }
+            if [[ "$pol" != "DROP" && "$pol" != "REJECT" ]]; then
+                echo "open"; return 0          # default-accept INPUT policy
+            fi
+            # Default-drop policy: look for an ACCEPT rule that an arbitrary
+            # internet host could match - i.e. -j ACCEPT, this proto, this port
+            # (or no port match at all), with no source restriction (-s), not
+            # loopback (-i lo), and not a conntrack/state rule.
+            local line
+            while IFS= read -r line; do
+                [[ "$line" == "-A "*" -j ACCEPT"* ]] || continue
+                [[ "$line" == *" -s "*      ]] && continue
+                [[ "$line" == *" -i lo"*    ]] && continue
+                [[ "$line" == *"--ctstate"* ]] && continue
+                [[ "$line" == *"--state "*  ]] && continue
+                # proto: must be this proto, or unspecified
+                [[ "$line" == *" -p "* && "$line" != *" -p ${proto} "* && "$line" != *" -p ${proto}" ]] && continue
+                # port: explicit --dport PORT, a multiport list containing PORT,
+                # or no port match at all (rule matches every port)
+                if [[ "$line" == *"--dport ${port} "* || "$line" == *"--dport ${port}" ]]; then
+                    echo "open"; return 0
+                fi
+                if [[ "$line" == *"--dports "* && "$line" == *"${port}"* ]]; then
+                    echo "open"; return 0      # multiport - loose match, biased to open
+                fi
+                if [[ "$line" != *"--dport"* && "$line" != *"--dports"* && "$line" != *"--sport"* ]]; then
+                    echo "open"; return 0      # accepts regardless of port
+                fi
+            done <<< "$dump"
+            echo "closed"; return 0 ;;
+        *)
+            echo "unknown"; return 0 ;;
+    esac
+}
+
 # -------- Open port --------
 # cb_firewall_open_port PROTO PORT [COMMENT]
 cb_firewall_open_port() {
