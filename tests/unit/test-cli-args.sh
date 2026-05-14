@@ -70,6 +70,7 @@ REMAINING=()
 parse_global "\$@"
 echo "FW=\${CB_FIREWALL_AUTO_OPEN:-unset}"
 echo "HARICA_FW=\${CB_HARICA_FIREWALL_AUTO_OPEN:-unset}"
+echo "FW_OPT_OUT=\${CB_FIREWALL_OPT_OUT:-unset}"
 echo "DOMAINS=\$CLI_DOMAINS"
 echo "CMD=\$CB_CMD"
 EOF
@@ -90,9 +91,14 @@ assert_contains "$out" "HARICA_FW=1" "--firewall -> CB_HARICA_FIREWALL_AUTO_OPEN
 out=$(bash "$SANDBOX/probe-parse.sh" auto --open-firewall --domain a.example.com 2>&1)
 assert_contains "$out" "FW=1" "--open-firewall (alias) -> ON"
 
-# D) --no-firewall
+# D) --no-firewall: forces FW off AND opts out of the fatal closed-port check
 out=$(bash "$SANDBOX/probe-parse.sh" auto --no-firewall --domain a.example.com 2>&1)
-assert_contains "$out" "FW=0" "--no-firewall -> OFF"
+assert_contains "$out" "FW=0"          "--no-firewall -> CB_FIREWALL_AUTO_OPEN=0"
+assert_contains "$out" "FW_OPT_OUT=1"  "--no-firewall -> CB_FIREWALL_OPT_OUT=1"
+
+# D2) without any firewall flag: opt-out stays unset (closed-port check is fatal)
+out=$(bash "$SANDBOX/probe-parse.sh" auto --domain a.example.com 2>&1)
+assert_contains "$out" "FW_OPT_OUT=unset" "no firewall flag -> opt-out unset"
 
 # E) repeated --domain
 out=$(bash "$SANDBOX/probe-parse.sh" auto --domain a.example.com --domain b.example.com 2>&1)

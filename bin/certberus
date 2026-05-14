@@ -10,7 +10,7 @@
 #
 set -uo pipefail
 
-CB_VERSION="0.2.2"
+CB_VERSION="0.2.3"
 
 # Locate libraries - dev mode (repo) or installed mode
 _SELF_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -104,8 +104,8 @@ Usage: certberus [GLOBAL] COMMAND [ARGS]
   --domain D (repeatable)      --email E
   --eab-kid KID    --eab-hmac HMAC    --acme-url URL
   --webroot DIR    --port80 STRAT (tomcat: iptables|webroot|proxy)
-  --firewall       Open ports 80/443 during 'auto' (default: do NOT open)
-  --no-firewall    Force certberus to leave the firewall alone
+  --firewall       certberus opens tcp/80+443 for the ACME challenge
+  --no-firewall    leave the firewall alone; proceed even if tcp/80 looks closed
   --skip-dns-check
   --set CB_X=Y     (repeatable, advanced override)
   -t/--staging   -y/--yes   -n/--dry-run   -v/--verbose
@@ -172,8 +172,13 @@ parse_global() {
             --webroot)   [[ $# -ge 2 ]] || cb_die "--webroot requires a value"; shift; CLI_WEBROOT="$1" ;;
             --port80)    [[ $# -ge 2 ]] || cb_die "--port80 requires a value"; shift; CLI_PORT80="$1" ;;
             --no-firewall)
+                # Leave the firewall alone AND proceed even if tcp/80 looks
+                # closed (CB_FIREWALL_OPT_OUT downgrades the closed-port check
+                # from fatal to a warning). For automation where the admin
+                # manages the firewall - or accepts mod_md will retry later.
                 cb_apply_cli_set "CB_FIREWALL_AUTO_OPEN=0"
-                CLI_SET_ARGS+=("CB_FIREWALL_AUTO_OPEN=0")
+                cb_apply_cli_set "CB_FIREWALL_OPT_OUT=1"
+                CLI_SET_ARGS+=("CB_FIREWALL_AUTO_OPEN=0" "CB_FIREWALL_OPT_OUT=1")
                 ;;
             --firewall|--open-firewall)
                 cb_apply_cli_set "CB_FIREWALL_AUTO_OPEN=1"
@@ -757,10 +762,26 @@ cmd_issue_webserver() {
                 cb_error "    A) let certberus open tcp/80 (+443) for the issuance:"
                 cb_error "         certberus install --firewall"
                 cb_error "    B) open tcp/80 yourself in the existing policy, then re-run"
-                cb_error "    C) proceed anyway (ACME keeps failing until 80 is reachable):"
-                cb_error "         CB_SKIP_PORT80_CHECK=1 certberus install"
+                cb_error "    C) proceed without touching the firewall (ACME keeps failing"
+                cb_error "       until tcp/80 is reachable - mod_md will retry):"
+                cb_error "         certberus install --no-firewall"
                 cb_error "######################################################################"
-                cb_die "Inbound tcp/80 is firewalled - ACME HTTP-01 cannot succeed."
+                # How to resolve the closed-firewall situation:
+                #   --no-firewall      -> explicit opt-out, proceed non-interactively
+                #   interactive TTY    -> ask the admin
+                #   otherwise          -> fail fast (automation must pick a flag)
+                if [[ "${CB_FIREWALL_OPT_OUT:-0}" == "1" ]]; then
+                    cb_warn "Proceeding without touching the firewall (--no-firewall)."
+                    cb_warn "  ACME HTTP-01 will keep failing until tcp/80 is reachable."
+                elif cb_has_tty && [[ "${CB_ASSUME_YES:-0}" != "1" ]]; then
+                    if cb_ask_yn "Continue anyway without opening the firewall?" "y/N"; then
+                        cb_warn "Continuing - mod_md will keep retrying until tcp/80 is reachable."
+                    else
+                        cb_die "Aborted - open tcp/80 first, or re-run with --firewall."
+                    fi
+                else
+                    cb_die "Inbound tcp/80 is firewalled. Re-run with --firewall (certberus opens it) or --no-firewall (proceed without)."
+                fi
                 ;;
         esac
     fi
