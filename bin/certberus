@@ -10,7 +10,7 @@
 #
 set -uo pipefail
 
-CB_VERSION="0.2.5"
+CB_VERSION="0.2.6"
 
 # Locate libraries - dev mode (repo) or installed mode
 _SELF_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"

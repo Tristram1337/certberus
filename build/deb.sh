@@ -86,7 +86,7 @@ Priority: optional
 Architecture: all
 Maintainer: certberus maintainers <root@localhost>
 Installed-Size: $INSTALLED_SIZE
-Depends: bash (>= 4.0), coreutils, grep, sed, gawk, openssl, curl, ca-certificates, bind9-dnsutils | dnsutils
+Depends: bash (>= 4.0), coreutils, grep, sed, awk, openssl, curl, ca-certificates, bind9-dnsutils | dnsutils
 Recommends: certbot
 Suggests: libapache2-mod-md, python3-certbot-apache, python3-certbot-nginx
 Homepage: https://github.com/Tristram1337/temp
