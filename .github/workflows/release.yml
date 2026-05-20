@@ -24,7 +24,7 @@ jobs:
       matrix:
         format: [tarball, deb, rpm, apk, bundle]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set version
         id: ver
@@ -43,7 +43,7 @@ jobs:
         run: bash build/build.sh ${{ matrix.format }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: certberus-${{ matrix.format }}
           path: dist/*
@@ -55,7 +55,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set version
         run: |
@@ -67,7 +67,7 @@ jobs:
           fi
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: dist-raw
 
@@ -87,10 +87,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: dist-raw
 
